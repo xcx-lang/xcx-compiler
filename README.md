@@ -128,7 +128,7 @@ Features: syntax highlighting, snippets, `.xcx` and `.pax` file support.
 
 ## Documentation
 
-Full documentation is available at **[xcx-lang.github.io](https://xcx-lang.github.io)** and locally in [`documentation/language/`](documentation/language/).
+Full documentation is available at **[xcx-lang.github.io]([https://xcx-lang.github.io](https://xcx-lang.github.io/xcx-site))** and locally in [`documentation/language/`](documentation/language/).
 
 | Topic | File |
 |---|---|
