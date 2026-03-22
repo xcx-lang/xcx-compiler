@@ -1,0 +1,7 @@
+>! 20 + 20; --- Addition 40
+>! 20 - 20; --- Subtraction 0
+>! 20 * 20; --- Multiplication 400
+>! 20 / 20; --- Division 1
+>! 20 % 20; --- Modulo 0
+>! 18 ^ 15; --- Power 6746640616477458432
+>! 20 ++ 20; --- Integer Digit Concatenation 2020

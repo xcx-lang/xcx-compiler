@@ -1,0 +1,12 @@
+set:N: setOne {1, 2, 3, 4, 5, 6, 7, 8, 9};
+set:N: setTwo {1,,30};
+
+set:N: setAfterUnion = setOne UNION setTwo;
+set:N: setAfterIntersection = setOne INTERSECTION setTwo;
+set:N: setAfterDifference = setOne DIFFERENCE setTwo;
+set:N: setAfterSymmetricDifference = setOne SYMMETRIC_DIFFERENCE setTwo;
+
+setAfterUnion.show();
+setAfterIntersection.show();
+setAfterDifference.show();
+setAfterSymmetricDifference.show();

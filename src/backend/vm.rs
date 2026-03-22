@@ -1256,7 +1256,11 @@ impl<'a, 'b> Executor<'a, 'b> {
                         println!("HALT.ALERT: FiberExhausted — .next() called on a done fiber");
                         self.vm.stack.push(Value::Bool(false));
                     } else {
+                        let initial_errors = self.vm.error_count;
                         let res = self.resume_fiber(frc.clone(), true);
+                        if self.vm.error_count > initial_errors {
+                            return OpResult::Halt;
+                        }
                         self.vm.stack.push(res.unwrap_or(Value::Bool(false)));
                     }
                 } else { self.vm.stack.push(Value::Bool(false)); }
@@ -1268,7 +1272,11 @@ impl<'a, 'b> Executor<'a, 'b> {
                     if !frc.borrow().is_done {
                         let cached = frc.borrow_mut().yielded_value.take();
                         if cached.is_none() {
+                            let initial_errors = self.vm.error_count;
                             self.resume_fiber(frc, false);
+                            if self.vm.error_count > initial_errors {
+                                return OpResult::Halt;
+                            }
                         }
                     }
                 }
@@ -1309,8 +1317,14 @@ impl<'a, 'b> Executor<'a, 'b> {
                 args.reverse();
                 if self.vm.call_depth >= MAX_CALL_DEPTH { return OpResult::Halt; }
                 self.vm.call_depth += 1;
+                let initial_errors = self.vm.error_count;
                 let res = self.run_frame(func_id, &args);
                 self.vm.call_depth -= 1;
+                
+                if self.vm.error_count > initial_errors {
+                    return OpResult::Halt;
+                }
+                
                 self.vm.stack.push(res.unwrap_or(Value::Bool(false)));
                 OpResult::Continue
             }
@@ -2120,6 +2134,11 @@ impl<'a, 'b> Executor<'a, 'b> {
                 drop(t);
                 let result = join_tables(&left_clone, &right_clone, &pred, "b", self);
                 self.vm.stack.push(Value::Table(std::rc::Rc::new(std::cell::RefCell::new(result))));
+            }
+            "clear" => {
+                drop(t);
+                t_rc.borrow_mut().rows.clear();
+                self.vm.stack.push(Value::Bool(true));
             }
             _ => { eprintln!("Unknown Table method: {}", method_name); return OpResult::Halt; }
         }

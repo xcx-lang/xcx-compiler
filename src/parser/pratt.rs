@@ -2372,7 +2372,7 @@ impl<'a> Parser<'a> {
 
         let mut columns = Vec::new();
         while self.current.kind != TokenKind::RightBracket && self.current.kind != TokenKind::EOF {
-            let col_name = if let TokenKind::Identifier(id) = self.current.kind {
+            let col_name = if let Some(id) = self.parse_identifier_as_string_id(false) {
                 id
             } else {
                 return None;

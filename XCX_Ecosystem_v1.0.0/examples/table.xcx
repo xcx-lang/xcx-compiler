@@ -1,0 +1,16 @@
+table: users {
+    columns = [
+        id :: i @auto,
+        userName :: s,
+        email :: s,
+        password :: s,
+        createdAt :: date
+    ]
+
+    rows = [("admin", "admin@mail.com", "admin", "2026-03-18")]
+
+}
+users.show();
+
+
+

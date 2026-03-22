@@ -727,7 +727,10 @@ impl<'a> Checker<'a> {
             crate::parser::ast::ExprKind::RawBlock(_) => Type::Json,
             crate::parser::ast::ExprKind::ArrayLiteral { elements } => {
                 if elements.is_empty() {
-                    return Type::Array(Box::new(Type::Int));
+                    return match context {
+                        Some(Type::Array(inner)) => Type::Array(inner),
+                        _ => Type::Array(Box::new(Type::Int)),
+                    };
                 }
                 let first_ty = self.check_expr(&elements[0], symbols, errors);
                 let mut is_mixed = false;
@@ -980,7 +983,10 @@ impl<'a> Checker<'a> {
                     }
                     _ => {
                         if elements.is_empty() {
-                            return Type::Array(Box::new(Type::Int));
+                            return match context {
+                                Some(Type::Array(inner)) => Type::Array(inner),
+                                _ => Type::Array(Box::new(Type::Int)),
+                            };
                         }
                         let first_ty = self.check_expr(&elements[0], symbols, errors);
                         Type::Array(Box::new(first_ty))
@@ -1366,6 +1372,7 @@ impl<'a> Checker<'a> {
                                 Type::Bool
                             }
                             "count" => Type::Int,
+                            "clear" => Type::Bool,
                             _ => {
                                 errors.push(TypeError {
                                     kind: TypeErrorKind::UndefinedVariable(format!("method {} for table", method_str)),

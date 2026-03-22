@@ -1,0 +1,17 @@
+func main() {
+    i: choice;
+    >! "1. Hello world! \n2. Goodbye! \n3. Exit";
+    >? choice;
+
+    if (choice == 1) then;
+        >! "Hello world!";
+    elseif (choice == 2) then;
+        >! "Goodbye!";
+    elseif (choice == 3) then;
+        .terminal !exit;
+    else;
+        halt.alert >! "Invalid choice!";
+        main();
+    end;
+};
+main();
