@@ -1,5 +1,7 @@
 # XCX 2.0
 
+![](https://raw.githubusercontent.com/xcx-lang/xcx-vscode/main/images/icon.png)
+
 A statically typed, general-purpose programming language with a backend focus. XCX compiles to bytecode and runs on a custom stack-based virtual machine written in Rust.
 
 ```xcx
