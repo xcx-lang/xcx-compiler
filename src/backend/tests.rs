@@ -1,7 +1,3 @@
-/// Integration tests for the XCX compiler backend.
-///
-/// Each test runs a complete pipeline: source → lexer → parser → checker → compiler → VM.
-/// Tests are grouped by the bug they cover so regressions are immediately identifiable.
 
 #[cfg(test)]
 mod tests {
@@ -12,9 +8,6 @@ mod tests {
     use crate::backend::vm::{VM, Value, SharedContext};
     use std::sync::Arc;
 
-    // -------------------------------------------------------------------------
-    // Helper: run a source string through the full pipeline and return the VM.
-    // -------------------------------------------------------------------------
     fn run(source: &str) -> Arc<VM> {
         let mut parser = Parser::new(source);
         let mut program = parser.parse_program();
@@ -38,27 +31,55 @@ mod tests {
         vm
     }
 
+    // Helper: assert a global is a specific integer
+    fn assert_int(vm: &Arc<VM>, idx: usize, expected: i64, msg: &str) {
+        match vm.get_global(idx) {
+            Some(v) if v.is_int() => assert_eq!(v.as_i64(), expected, "{}", msg),
+            other => panic!("{}: expected Int({}), got {:?}", msg, expected, other),
+        }
+    }
+
+    // Helper: assert a global is a specific bool
+    fn assert_bool(vm: &Arc<VM>, idx: usize, expected: bool, msg: &str) {
+        match vm.get_global(idx) {
+            Some(v) if v.is_bool() => assert_eq!(v.as_bool(), expected, "{}", msg),
+            // false is also the default NaN-box value for uninitialised slots
+            None if !expected => {}
+            other => panic!("{}: expected Bool({}), got {:?}", msg, expected, other),
+        }
+    }
+
+    // Helper: assert a global is a specific string
+    fn assert_str(vm: &Arc<VM>, idx: usize, expected: &str, msg: &str) {
+        match vm.get_global(idx) {
+            Some(v) if v.is_ptr() => {
+                assert_eq!(v.as_string().as_ref(), expected, "{}", msg);
+            }
+            other => panic!("{}: expected Str({:?}), got {:?}", msg, expected, other),
+        }
+    }
+
+    // Helper: assert a global is a float approximately equal to expected
+    fn assert_float(vm: &Arc<VM>, idx: usize, expected: f64, msg: &str) {
+        match vm.get_global(idx) {
+            Some(v) if v.is_float() => assert!((v.as_f64() - expected).abs() < 1e-9, "{}: expected {}, got {}", msg, expected, v.as_f64()),
+            other => panic!("{}: expected Float({}), got {:?}", msg, expected, other),
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Sanity test — basic arithmetic (original smoke test, kept for reference).
     // -------------------------------------------------------------------------
     #[test]
     fn test_basic_arithmetic() {
-        // Declare two ints, print their sum. Checks that the whole pipeline works.
         run("i: x = 10; i: y = 20; >! x + y;");
     }
 
     // -------------------------------------------------------------------------
     // REPL — Parser::new_with_interner was called without `source`.
-    //
-    // Regression: confirm that Parser::new (which internally calls
-    // new_with_interner with the source) compiles without panic and that a
-    // program parsed this way produces no errors.
     // -------------------------------------------------------------------------
     #[test]
     fn test_repl_parser_new_accepts_source() {
-        // Parser::new(source) must accept a string slice and produce a working
-        // program — if the function signature were broken this would not compile.
         let source = "i: a = 42;";
         let mut parser = Parser::new(source);
         let mut program = parser.parse_program();
@@ -72,19 +93,9 @@ mod tests {
 
     // -------------------------------------------------------------------------
     // Regression: Ensure no debug prints in production.
-    //
-    // Compiling a method call that took the "fallback" branch in
-    // compile_func_expr used to emit a println!("DEBUG_COMPILE: ...").
-    // We verify the output goes to stdout correctly (i.e. the program outputs
-    // something via >! not the debug message). Since we can't easily capture
-    // stdout in a unit test, we at minimum confirm the pipeline runs without
-    // panicking and the bytecode is generated.
     // -------------------------------------------------------------------------
     #[test]
     fn test_no_debug_print_on_method_call() {
-        // `count` on a table triggers the fallback MethodCall path.  
-        // The test just ensures it doesn't panic/crash — the debug line has
-        // been removed so nothing leaks to stdout.
         let source = r#"
             table: t = table {
                 columns: [id :: i @auto, name :: s]
@@ -98,28 +109,21 @@ mod tests {
 
     // -------------------------------------------------------------------------
     // Regression: Unary negation of a float literal crashed the VM.
-    //
-    // `-3.14` was compiled as `Int(0) - Float(3.14)` which hit the "Sub" arm
-    // with mismatched types.  After the fix it emits `Float(0.0) - Float(3.14)`.
     // -------------------------------------------------------------------------
     #[test]
     fn test_unary_negation_float_does_not_crash() {
-        // -3.14 assignment: f: x = -3.14;
         let source = "f: x = -3.14;";
-        run(source); // must not panic with a runtime type error
+        run(source);
     }
 
     #[test]
     fn test_unary_negation_int_still_works() {
-        // Ensure the existing int-negation path is unbroken.
         let source = "i: x = -7;";
         run(source);
     }
 
     #[test]
     fn test_unary_negation_float_value_is_correct() {
-        // Confirm the computed value is actually negative.
-        // We store into a variable and retrieve it via get_global.
         let source = "f: result = -2.5;";
 
         let mut parser = Parser::new(source);
@@ -140,33 +144,14 @@ mod tests {
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
 
-        match vm.get_global(global_idx) {
-            Some(Value::Float(v)) => {
-                assert!(
-                    (v - (-2.5_f64)).abs() < 1e-9,
-                    "Expected -2.5, got {}",
-                    v
-                );
-            }
-            other => panic!("Expected Float(-2.5), got {:?}", other),
-        }
+        assert_float(&vm, global_idx, -2.5, "Expected -2.5");
     }
 
     // -------------------------------------------------------------------------
     // Regression: halt.error did not stop the current frame.
-    //
-    // After halt.error executes, no further statements in the same frame
-    // must be executed. We verify this by placing a variable assignment AFTER
-    // halt.error — that assignment must NOT run, leaving the variable at its
-    // default value.
     // -------------------------------------------------------------------------
     #[test]
     fn test_halt_error_stops_current_frame() {
-        // `sentinel` starts at 0. After halt.error >! "..." the `i: sentinel = 99`
-        // assignment must NOT execute. If halt.error is broken, sentinel becomes 99.
-        //
-        // Per the XCX spec / parse_halt_stmt, the syntax is:
-        //   halt.error >! "message";
         let source = "i: sentinel = 0;\nhalt.error >! \"stopping here\";\ni: sentinel = 99;";
 
         let mut parser = Parser::new(source);
@@ -187,34 +172,24 @@ mod tests {
         vm.clone().run(main_chunk, ctx);
 
         match vm.get_global(global_idx) {
-            Some(Value::Int(v)) => assert_eq!(
-                v, 0,
-                "halt.error failed to stop the frame — sentinel was mutated to {}",
-                v
-            ),
-            Some(Value::Bool(false)) => {} // slot never reached — halt.error stopped execution
+            Some(v) if v.is_int() => assert_eq!(v.as_i64(), 0, "halt.error failed to stop frame — sentinel was mutated to {}", v.as_i64()),
+            Some(v) if v.is_bool() && !v.as_bool() => {} // uninitialised slot — halt stopped execution
+            None => {} // halt stopped before global was written
             other => panic!("Unexpected value for sentinel: {:?}", other),
         }
     }
 
     // -------------------------------------------------------------------------
     // Regression: Globals Vec was fixed at 1024 entries.
-    //
-    // Declare more than 1024 distinct global variables. Before the fix this
-    // would either panic (OOB) or silently corrupt memory. After the fix
-    // the Vec grows automatically.
     // -------------------------------------------------------------------------
     #[test]
     fn test_globals_exceed_1024() {
-        // Generate a program that declares 1030 distinct global int variables.
         let mut source = String::new();
         for i in 0..1030 {
             source.push_str(&format!("i: var{i} = {i};\n"));
         }
-        // Print the last one so the compiler keeps it.
         source.push_str(">! var1029;");
-
-        run(&source); // must not panic or index-out-of-bounds
+        run(&source);
     }
 
     // -------------------------------------------------------------------------
@@ -224,13 +199,11 @@ mod tests {
     #[test]
     fn test_http_client_local_server() {
         use std::thread;
-        
-        // Start a tiny_http server on a random port
+
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let addr_str = server.server_addr().to_string();
         let port = addr_str.split(':').last().unwrap().parse::<u16>().unwrap();
-        
-        // Spawn responder thread
+
         thread::spawn(move || {
             if let Ok(Some(request)) = server.recv_timeout(std::time::Duration::from_secs(5)) {
                 let response = tiny_http::Response::from_string("{\"hello\":\"world\"}")
@@ -238,7 +211,7 @@ mod tests {
                 let _ = request.respond(response);
             }
         });
-        
+
         let source = format!(r#"
             i: success = 0;
             json: res = net.get("http://127.0.0.1:{}");
@@ -248,27 +221,24 @@ mod tests {
                 end;
             end;
         "#, port);
-        
+
         let mut parser = Parser::new(&source);
         let mut program = parser.parse_program();
         let mut interner = parser.into_interner();
         let mut checker = Checker::new(&interner);
         let mut symbols = SymbolTable::new();
         let _ = checker.check(&mut program, &mut symbols);
-        
+
         let success_id = interner.intern("success");
         let mut compiler = XCXCompiler::new();
         let (main_chunk, constants, functions) = compiler.compile(&program, &mut interner);
         let success_idx = compiler.get_global_idx(success_id);
-        
+
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        
-        match vm.get_global(success_idx) {
-            Some(Value::Int(42)) => {},
-            other => panic!("HTTP integration test failed! Expected success=42, got {:?}", other),
-        }
+
+        assert_int(&vm, success_idx, 42, "HTTP integration test failed");
     }
 
     #[test]
@@ -283,18 +253,20 @@ mod tests {
         let mut checker = Checker::new(&interner);
         let mut symbols = SymbolTable::new();
         let _ = checker.check(&mut program, &mut symbols);
-        
+
         let err_id = interner.intern("err");
         let mut compiler = XCXCompiler::new();
         let (main_chunk, constants, functions) = compiler.compile(&program, &mut interner);
         let err_idx = compiler.get_global_idx(err_id);
-        
+
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        
+
         match vm.get_global(err_idx) {
-            Some(Value::String(s)) => assert!(s.contains("SSRF")),
+            Some(v) if v.is_ptr() => {
+                assert!(v.as_string().contains("SSRF"), "Expected SSRF error string");
+            }
             other => panic!("SSRF protection test failed! Expected error string, got {:?}", other),
         }
     }
@@ -305,9 +277,7 @@ mod tests {
 
     #[test]
     fn test_string_starts_with_true() {
-        let source = r#"
-            b: result = "admin@xcx.pl".startsWith("admin");
-        "#;
+        let source = r#"b: result = "admin@xcx.pl".startsWith("admin");"#;
         let mut parser = Parser::new(source);
         let mut program = parser.parse_program();
         let mut interner = parser.into_interner();
@@ -321,14 +291,12 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(idx), Some(Value::Bool(true)), "startsWith(\"admin\") should be true");
+        assert_bool(&vm, idx, true, "startsWith(\"admin\") should be true");
     }
 
     #[test]
     fn test_string_starts_with_false() {
-        let source = r#"
-            b: result = "xcx@xcx.pl".startsWith("admin");
-        "#;
+        let source = r#"b: result = "xcx@xcx.pl".startsWith("admin");"#;
         let mut parser = Parser::new(source);
         let mut program = parser.parse_program();
         let mut interner = parser.into_interner();
@@ -342,14 +310,12 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(idx), Some(Value::Bool(false)), "startsWith(\"admin\") should be false");
+        assert_bool(&vm, idx, false, "startsWith(\"admin\") should be false");
     }
 
     #[test]
     fn test_string_ends_with_true() {
-        let source = r#"
-            b: result = "main.xcx".endsWith(".xcx");
-        "#;
+        let source = r#"b: result = "main.xcx".endsWith(".xcx");"#;
         let mut parser = Parser::new(source);
         let mut program = parser.parse_program();
         let mut interner = parser.into_interner();
@@ -363,14 +329,12 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(idx), Some(Value::Bool(true)), "endsWith(\".xcx\") should be true");
+        assert_bool(&vm, idx, true, "endsWith(\".xcx\") should be true");
     }
 
     #[test]
     fn test_string_ends_with_false() {
-        let source = r#"
-            b: result = "main.xcx".endsWith(".rs");
-        "#;
+        let source = r#"b: result = "main.xcx".endsWith(".rs");"#;
         let mut parser = Parser::new(source);
         let mut program = parser.parse_program();
         let mut interner = parser.into_interner();
@@ -384,14 +348,12 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(idx), Some(Value::Bool(false)), "endsWith(\".rs\") should be false");
+        assert_bool(&vm, idx, false, "endsWith(\".rs\") should be false");
     }
 
     #[test]
     fn test_string_to_int_valid() {
-        let source = r#"
-            i: result = "42".toInt();
-        "#;
+        let source = r#"i: result = "42".toInt();"#;
         let mut parser = Parser::new(source);
         let mut program = parser.parse_program();
         let mut interner = parser.into_interner();
@@ -405,14 +367,12 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(idx), Some(Value::Int(42)), ".toInt() should return 42");
+        assert_int(&vm, idx, 42, ".toInt() should return 42");
     }
 
     #[test]
     fn test_string_to_float_valid() {
-        let source = r#"
-            f: result = "3.14".toFloat();
-        "#;
+        let source = r#"f: result = "3.14".toFloat();"#;
         let mut parser = Parser::new(source);
         let mut program = parser.parse_program();
         let mut interner = parser.into_interner();
@@ -426,18 +386,12 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        match vm.get_global(idx) {
-            Some(Value::Float(f)) => assert!((f - 3.14_f64).abs() < 1e-9, "Expected 3.14, got {}", f),
-            other => panic!(".toFloat() expected Float(3.14), got {:?}", other),
-        }
+        assert_float(&vm, idx, 3.14, ".toFloat() expected 3.14");
     }
 
     #[test]
     fn test_string_to_int_with_whitespace() {
-        // .toInt() should trim before parsing
-        let source = r#"
-            i: result = "  99  ".toInt();
-        "#;
+        let source = r#"i: result = "  99  ".toInt();"#;
         let mut parser = Parser::new(source);
         let mut program = parser.parse_program();
         let mut interner = parser.into_interner();
@@ -451,7 +405,7 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(idx), Some(Value::Int(99)), ".toInt() should handle whitespace");
+        assert_int(&vm, idx, 99, ".toInt() should handle whitespace");
     }
 
     // -------------------------------------------------------------------------
@@ -460,7 +414,6 @@ mod tests {
 
     #[test]
     fn test_array_sort_integers() {
-        // sort() is in-place; check first element is smallest after sort
         let source = r#"
             array:i: nums {5, 2, 8, 1, 9};
             nums.sort();
@@ -482,8 +435,8 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(first_idx), Some(Value::Int(1)), "After sort first element should be 1");
-        assert_eq!(vm.get_global(last_idx),  Some(Value::Int(9)), "After sort last element should be 9");
+        assert_int(&vm, first_idx, 1, "After sort first element should be 1");
+        assert_int(&vm, last_idx,  9, "After sort last element should be 9");
     }
 
     #[test]
@@ -506,11 +459,7 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(
-            vm.get_global(first_idx),
-            Some(Value::String("apple".to_string())),
-            "After sort first string should be 'apple'"
-        );
+        assert_str(&vm, first_idx, "apple", "After sort first string should be 'apple'");
     }
 
     #[test]
@@ -536,13 +485,12 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(first_idx), Some(Value::Int(5)), "After reverse first should be 5");
-        assert_eq!(vm.get_global(last_idx),  Some(Value::Int(1)), "After reverse last should be 1");
+        assert_int(&vm, first_idx, 5, "After reverse first should be 5");
+        assert_int(&vm, last_idx,  1, "After reverse last should be 1");
     }
 
     #[test]
     fn test_array_sort_then_reverse() {
-        // sort ascending then reverse = descending
         let source = r#"
             array:i: nums {3, 1, 4, 1, 5, 9, 2, 6};
             nums.sort();
@@ -562,7 +510,7 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(first_idx), Some(Value::Int(9)), "After sort+reverse first should be 9");
+        assert_int(&vm, first_idx, 9, "After sort+reverse first should be 9");
     }
 
     #[test]
@@ -584,16 +532,14 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(idx), Some(Value::Bool(true)), "@wait(10) should execute and allow next stmt");
+        assert_bool(&vm, idx, true, "@wait(10) should execute and allow next stmt");
     }
 
     #[test]
     fn test_env_get() {
         unsafe { std::env::set_var("XCX_TEST_VAR", "hello_xcx"); }
-        
-        let source = r#"
-            s: val = env.get("XCX_TEST_VAR");
-        "#;
+
+        let source = r#"s: val = env.get("XCX_TEST_VAR");"#;
         let mut parser = Parser::new(source);
         let mut program = parser.parse_program();
         let mut interner = parser.into_interner();
@@ -607,7 +553,7 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(idx), Some(Value::String("hello_xcx".to_string())), "env.get should retrieve XCX_TEST_VAR");
+        assert_str(&vm, idx, "hello_xcx", "env.get should retrieve XCX_TEST_VAR");
     }
 
     #[test]
@@ -633,8 +579,8 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(ok_idx), Some(Value::Bool(true)), "bcrypt verify should be true for correct password");
-        assert_eq!(vm.get_global(fail_idx), Some(Value::Bool(false)), "bcrypt verify should be false for wrong password");
+        assert_bool(&vm, ok_idx,   true,  "bcrypt verify should be true for correct password");
+        assert_bool(&vm, fail_idx, false, "bcrypt verify should be false for wrong password");
     }
 
     #[test]
@@ -657,7 +603,7 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(ok_idx), Some(Value::Bool(true)), "argon2 verify should be true for correct password");
+        assert_bool(&vm, ok_idx, true, "argon2 verify should be true for correct password");
     }
 
     #[test]
@@ -683,7 +629,15 @@ mod tests {
         let vm = Arc::new(VM::new());
         let ctx = SharedContext { constants, functions };
         vm.clone().run(main_chunk, ctx);
-        assert_eq!(vm.get_global(l1_idx), Some(Value::Int(16)));
-        assert_eq!(vm.get_global(l2_idx), Some(Value::Int(32)));
+        assert_int(&vm, l1_idx, 16, "crypto.token(16) hex length should be 16");
+        assert_int(&vm, l2_idx, 32, "crypto.token(32) hex length should be 32");
+    }
+
+    // -------------------------------------------------------------------------
+    // Value size guarantee — NaN-boxing must fit in 8 bytes
+    // -------------------------------------------------------------------------
+    #[test]
+    fn test_value_size_is_8_bytes() {
+        assert_eq!(std::mem::size_of::<Value>(), 8, "Value must be exactly 8 bytes (NaN-boxed)");
     }
 }

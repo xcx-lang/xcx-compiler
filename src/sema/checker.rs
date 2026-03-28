@@ -95,8 +95,6 @@ impl<'a> Checker<'a> {
                         is_fiber: true,
                     };
                     self.functions.insert(name_str.clone(), sig);
-                    // Also put into global symbols with the correct Fiber type so that
-                    // FiberDecl's fallback path (symbols.lookup) also finds the right type.
                     let var_type = Type::Fiber(return_type.as_ref().map(|t| Box::new(t.clone())));
                     symbols.define(name_str, var_type, false);
                 }
@@ -175,7 +173,6 @@ impl<'a> Checker<'a> {
             }
             crate::parser::ast::StmtKind::FunctionDef { name, params, return_type, body } => {
                 let name_str = self.interner.lookup(*name).to_string();
-                // Already registered in pre_scan; ensure visible in current scope too.
                 if !symbols.has(&name_str) {
                     symbols.define(name_str.clone(), Type::Unknown, false);
                 }
@@ -185,7 +182,6 @@ impl<'a> Checker<'a> {
                 self.fiber_context = Some(return_type.clone());
                 
                 func_symbols.enter_scope();
-                // Self-register for recursion
                 func_symbols.define(name_str, Type::Unknown, false);
 
                 for (ty, param_name) in params {
@@ -202,7 +198,6 @@ impl<'a> Checker<'a> {
                 match context {
                     Some(Some(expected)) => {
                         if let Some(e) = expr {
-                            // return <value>; in typed fiber — check type matches yield type.
                             let actual = self.check_expr(e, symbols, errors);
                             if actual != Type::Unknown && !self.is_compatible(&expected, &actual) {
                                 errors.push(TypeError {
@@ -211,7 +206,6 @@ impl<'a> Checker<'a> {
                                 });
                             }
                         } else {
-                            // S210: Bare return; in a typed fiber is forbidden.
                             errors.push(TypeError {
                                 kind: TypeErrorKind::ReturnTypeMismatchInFiber,
                                 span: span.clone(),
@@ -291,7 +285,8 @@ impl<'a> Checker<'a> {
                             *inner
                         }
                         Type::Set(st) => {
-                            *iter_type = crate::parser::ast::ForIterType::Array;
+                            *iter_type = crate::parser::ast::ForIterType::Set;
+
                             match st {
                                 crate::parser::ast::SetType::N | crate::parser::ast::SetType::Z => Type::Int,
                                 crate::parser::ast::SetType::Q => Type::Float,
@@ -410,15 +405,6 @@ impl<'a> Checker<'a> {
             crate::parser::ast::StmtKind::FunctionCallStmt { name, args } => {
                 let name_str = self.interner.lookup(*name).to_string();
                 let mut resolved_sig = self.functions.get(&name_str).cloned();
-                if resolved_sig.is_none() {
-                    if symbols.has(&name_str) {
-                         resolved_sig = Some(FunctionSignature {
-                             params: vec![Type::Unknown; args.len()],
-                             return_type: Some(Type::Unknown),
-                             is_fiber: false,
-                         });
-                    }
-                }
 
                 if let Some(sig) = resolved_sig {
                     if args.len() != sig.params.len() {
@@ -478,7 +464,6 @@ impl<'a> Checker<'a> {
             crate::parser::ast::StmtKind::FiberDef { name, params, return_type, body } => {
                 let name_str = self.interner.lookup(*name).to_string();
                 let var_type = Type::Fiber(return_type.as_ref().map(|t| Box::new(t.clone())));
-                // pre_scan already defined this; ensure it's visible if somehow missed.
                 if !symbols.has(&name_str) {
                     symbols.define(name_str.clone(), var_type.clone(), false);
                 }
@@ -490,7 +475,6 @@ impl<'a> Checker<'a> {
 
                 let mut child = SymbolTable::new_with_parent(symbols);
                 child.enter_scope();
-                // Self-register for recursion with correct return type.
                 child.define(name_str, var_type, false);
 
                 for (ty, pname) in params {
@@ -543,7 +527,6 @@ impl<'a> Checker<'a> {
                             });
                         }
                     }
-                    // Check any extra args that go beyond sig.params (variadic-ish).
                     for arg in args.iter().skip(sig.params.len()) {
                         self.check_expr(arg, symbols, errors);
                     }
@@ -756,11 +739,15 @@ impl<'a> Checker<'a> {
                             match (&l_ty, &r_ty) {
                                 (Type::Date, Type::Int) => return Type::Date,
                                 (Type::Date, Type::Date) => return Type::Int,
+                                (Type::Int, Type::Date) => return Type::Int,
+                                (Type::Set(_), Type::Set(_)) if l_ty == r_ty => return l_ty.clone(),
                                 _ => {}
                             }
                         }
                         if (l_ty == Type::Int || l_ty == Type::Float) && (r_ty == Type::Int || r_ty == Type::Float) {
                             if l_ty == Type::Float || r_ty == Type::Float { Type::Float } else { Type::Int }
+                        } else if matches!(l_ty, Type::Set(_)) && l_ty == r_ty && op == &TokenKind::Minus {
+                            l_ty.clone()
                         } else {
                             errors.push(TypeError { kind: TypeErrorKind::InvalidBinaryOp { op: op.clone(), left: l_ty, right: r_ty }, span: span.clone() });
                             Type::Unknown
@@ -1582,7 +1569,7 @@ impl<'a> Checker<'a> {
             return id1 == id2;
         }
         match (expected, actual) {
-            (Type::Int, Type::Float) | (Type::Float, Type::Int) => true,
+            (Type::Int, Type::Float) | (Type::Float, Type::Int) | (Type::Int, Type::Date) | (Type::Date, Type::Int) => true,
             (Type::Set(st), Type::Array(inner)) | (Type::Array(inner), Type::Set(st)) => {
                 let inner_target = match st {
                     SetType::N | SetType::Z => Type::Int,

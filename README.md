@@ -1,10 +1,10 @@
-# XCX 2.1
+# XCX 2.2
 
 ![](https://raw.githubusercontent.com/xcx-lang/xcx-vscode/main/images/banner.png)
 
 ![Rust](https://img.shields.io/badge/built%20with-Rust-orange)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Version](https://img.shields.io/badge/version-2.0-brightgreen)
+![Version](https://img.shields.io/badge/version-2.2.0-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 A statically typed, general-purpose programming language with a backend focus. XCX compiles to bytecode and runs on a custom stack-based virtual machine written in Rust.

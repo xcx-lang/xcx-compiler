@@ -15,8 +15,10 @@ pub enum SetType {
 pub enum ForIterType {
     Range,
     Array,
+    Set,
     Fiber,
 }
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnDef {
@@ -213,25 +215,20 @@ pub enum StmtKind {
         mapping: Box<Expr>,
         table: StringId,
     },
-    /// fiber name(params -> T?) { body };
     FiberDef {
         name: StringId,
         params: Vec<(Type, StringId)>,
-        return_type: Option<Type>,   // None = void fiber
+        return_type: Option<Type>,   
         body: Vec<Stmt>,
     },
-    /// fiber:T: varname = fiberName(args);  OR  fiber: varname = fiberName(args);
     FiberDecl {
-        inner_type: Option<Type>,    // None = void fiber
-        name: StringId,              // variable name
-        fiber_name: StringId,        // which FiberDef to instantiate
+        inner_type: Option<Type>,    
+        name: StringId,              
+        fiber_name: StringId,        
         args: Vec<Expr>,
     },
-    /// yield expr;  — inside a typed fiber
     Yield(Expr),
-    /// yield from expr;  — delegated fiber execution
     YieldFrom(Expr),
-    /// yield;  — inside a void fiber
     YieldVoid,
     NetRequestStmt {
         method: Box<Expr>,
@@ -248,7 +245,6 @@ pub enum StmtKind {
         workers: Option<Box<Expr>>,
         routes: Box<Expr>,
     },
-    /// @wait expr; — synchronous sleep for expr milliseconds
     Wait(Expr),
 }
 

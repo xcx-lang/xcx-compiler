@@ -1,0 +1,56 @@
+--- test_functions.xcx
+--- Styles, recursion, parameters, return
+
+>! "Running test_functions.xcx...";
+
+--- Styles
+func void_func() {
+    --- >! "Void function called";
+};
+
+func return_val_func(-> f) {
+    return 3.14159;
+};
+
+func params_func(s: who) {
+    if (who != "XCX") then; 
+        halt.error >! "Params function failed";
+    end;
+};
+
+func math_func(i: x, i: y -> i) {
+    return x + y;
+};
+
+--- Calling
+void_func();
+
+if (return_val_func() != 3.14159) then; 
+    halt.error >! "Return value function failed";
+end;
+
+params_func("XCX");
+
+if (math_func(3, 4) != 7) then; 
+    halt.error >! "Math function failed";
+end;
+
+--- Recursion
+func fact_rec(i: n -> i) {
+    if (n <= 1) then;
+        return 1;
+    else;
+        return n * fact_rec(n - 1);
+    end;
+};
+
+if (fact_rec(5) != 120) then; 
+    halt.error >! "Recursion failed"; 
+end;
+
+--- Nested calling
+if (math_func(fact_rec(3), math_func(1, 1)) != 8) then; --- 6 + 2 = 8
+    halt.error >! "Nested calling failed";
+end;
+
+>! "test_functions.xcx passed.";

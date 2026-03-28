@@ -1,0 +1,64 @@
+--- test_basics.xcx
+--- Variables, Constants, Types, Casting, Identifiers, Comments
+
+>! "Running test_basics.xcx...";
+
+--- Comments
+--- This is a single line comment
+--- Another one
+---
+Multi-line
+comment
+*---
+
+--- Variables and Types
+i: a_int = 10;
+f: b_float = 3.14;
+s: c_string = "hello";
+b: d_bool = true;
+
+if (a_int != 10 OR b_float != 3.14 OR c_string != "hello" OR d_bool != true) then;
+    halt.error >! "Variable initialization failed";
+end;
+
+--- Default values
+i: def_i;
+f: def_f;
+s: def_s;
+b: def_b;
+
+if (def_i != 0 OR def_f != 0.0 OR def_s != "" OR def_b != false) then;
+    halt.error >! "Default values failed";
+end;
+
+--- Constants
+const i: K_CONST = 100;
+if (K_CONST != 100) then;
+    halt.error >! "Constant failed";
+end;
+
+--- Casting
+f: x_float = 3.7;
+i: n_int = i(x_float);
+if (n_int != 3) then;
+    halt.error >! "Float to Int casting failed";
+end;
+
+i: m_int = 42;
+f: y_float = f(m_int);
+if (y_float != 42.0) then;
+    halt.error >! "Int to Float casting failed";
+end;
+
+s: s_num = s(m_int);
+if (s_num != "42") then;
+    halt.error >! "Int to String casting failed";
+end;
+
+--- Reassignment
+a_int = 20;
+if (a_int != 20) then;
+    halt.error >! "Reassignment failed";
+end;
+
+>! "test_basics.xcx passed.";

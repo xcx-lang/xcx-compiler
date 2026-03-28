@@ -29,8 +29,8 @@ fn main() {
 
     let first_arg = &args[1];
     if first_arg == "--version" || first_arg == "version" {
-        println!("XCX Compiler v2.1");
-        println!("Language Version: XCX 2.1");
+        println!("XCX Compiler v2.2");
+        println!("Language Version: XCX 2.2");
         println!("Author: Heisenberg");
         return;
     }
@@ -144,5 +144,9 @@ fn run_file(filename: &str) {
     };
 
     let vm = Arc::new(VM::new());
+    let vm2 = vm.clone();
     vm.run(main_chunk, ctx);
+    if vm2.error_count.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        std::process::exit(1);
+    }
 }

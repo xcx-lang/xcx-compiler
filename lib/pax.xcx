@@ -271,9 +271,6 @@ func paxRemove(array:s: args) {
     end;
     
     if (target_idx >= 0) then;
-        --- result.delete on json array... does it exist? 
-        --- In vm.rs I only added size. Let's assume we need to rebuild the array or add delete.
-        --- For now, let's just use JSON delete if it exists (it was added in vm.rs earlier by me)
         deps.delete(target_idx);
         cfg.set("deps", deps);
         store.write("project.pax", toPax(cfg));
@@ -334,7 +331,6 @@ func paxRun(array:s: args) {
     s: target = "src/main.xcx";
     if (args.size() > 3) then;
         target = args.get(3);
-        --- If it's a directory, try finding src/main.xcx inside
         if (store.exists(target + "/src/main.xcx")) then;
             target = target + "/src/main.xcx";
         end;

@@ -1,0 +1,34 @@
+--- test_io.xcx
+--- Console Output, @wait, .terminal, String Methods
+
+>! "Running test_io.xcx...";
+
+--- 1. String Methods
+s: s_val_test = "  Hello XCX  ";
+if (s_val_test.length != 13) then; halt.error >! "String length failed"; end;
+if (s_val_test.trim() != "Hello XCX") then; halt.error >! "String trim failed"; end;
+if (s_val_test.trim().upper() != "HELLO XCX") then; halt.error >! "String upper failed"; end;
+if (s_val_test.trim().lower() != "hello xcx") then; halt.error >! "String lower failed"; end;
+
+s: s_rep_val = "a-b-c".replace("-", "_");
+if (s_rep_val != "a_b_c") then; halt.error >! "String replace failed"; end;
+
+s: s_slice_val = "Programming".slice(0, 4);
+if (s_slice_val != "Prog") then; halt.error >! "String slice failed"; end;
+
+if ("abc".indexOf("b") != 1) then; halt.error >! "String indexOf failed"; end;
+if ("aba".lastIndexOf("a") != 2) then; halt.error >! "String lastIndexOf failed"; end;
+
+if (NOT "Hello".startsWith("He")) then; halt.error >! "String startsWith failed"; end;
+if (NOT "Hello".endsWith("lo")) then; halt.error >! "String endsWith failed"; end;
+
+if ("123".toInt() != 123) then; halt.error >! "String toInt failed"; end;
+if ("123.45".toFloat() != 123.45) then; halt.error >! "String toFloat failed"; end;
+
+--- 2. Wait
+@wait 100;
+
+--- 3. Terminal
+.terminal !clear;
+
+>! "test_io.xcx passed.";

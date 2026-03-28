@@ -1,0 +1,68 @@
+--- test_json_http.xcx
+--- JSON methods, HTTP client
+
+>! "Running test_json_http.xcx...";
+
+--- 1. JSON Basics
+json: cfg <<< {"port": 8080, "debug": false, "tags": ["test", "dev"]} >>>;
+
+if (NOT cfg.exists("port")) then; halt.error >! "JSON exists failed"; end;
+if (cfg.size() != 3) then; halt.error >! "JSON size failed"; end;
+
+i: p_val_port;
+cfg.bind("port", p_val_port);
+if (p_val_port != 8080) then; halt.error >! "JSON bind failed"; end;
+
+cfg.set("debug", true);
+b: d_val_debug;
+cfg.bind("debug", d_val_debug);
+if (NOT d_val_debug) then; halt.error >! "JSON set failed"; end;
+
+s: first_tag;
+cfg.bind("tags[0]", first_tag);
+if (first_tag != "test") then; halt.error >! "JSON array bind failed"; end;
+
+--- Parsing
+s: raw_json = "{\"a\": 1}";
+json: p_json = json.parse(raw_json);
+if (NOT p_json.exists("a")) then; halt.error >! "JSON parse failed"; end;
+
+--- 2. HTTP Client (requires internet)
+>! "Testing HTTP Client (httpbin.org)...";
+
+json: resp_get = net.get("https://httpbin.org/get?msg=hello");
+if (NOT resp_get.ok) then; halt.error >! "HTTP GET failed"; end;
+s: arg_msg;
+resp_get.bind("body.args.msg", arg_msg);
+if (arg_msg != "hello") then; halt.error >! "HTTP GET body parsing failed"; end;
+
+json: post_body <<< {"test": "data"} >>>;
+json: resp_post = net.post("https://httpbin.org/post", post_body);
+if (NOT resp_post.ok) then; halt.error >! "HTTP POST failed"; end;
+
+--- Low-level builder
+map: headers_m { schema=[s <-> s] data=["X-Test"::"Value"] };
+net.request {
+    method  = "GET",
+    url     = "https://httpbin.org/headers",
+    headers = headers_m,
+    timeout = 10000
+} as resp_req;
+
+if (NOT resp_req.ok) then; halt.error >! "net.request failed"; end;
+s: h_val_check;
+resp_req.bind("body.headers.X-Test", h_val_check);
+--- httpbin might normalize header names
+if (h_val_check != "Value") then; 
+    --- try lowercase
+    resp_req.bind("body.headers.X-test", h_val_check);
+    if (h_val_check != "Value") then;
+         --- Some httpbins might return "X-Test" as "X-Test" but bind might be case sensitive? 
+         --- Actually bind is path based. If it's there it should work.
+         --- Let's just print it if it fails first.
+         >! "Header mismatch, got: " + h_val_check;
+         halt.error >! "net.request header check failed";
+    end;
+end;
+
+>! "test_json_http.xcx passed.";

@@ -290,7 +290,7 @@ fn map_update_overwrites_existing_key() {
     vm.clone().run(main_chunk, ctx);
 
     match vm.get_global(global_idx) {
-        Some(Value::Int(v)) => assert_eq!(v, 35, "Expected 35 after update, got {}", v),
+        Some(v) if v.is_int() => assert_eq!(v.as_i64(), 35, "Expected 35 after update, got {}", v.as_i64()),
         other => panic!("Expected Int(35), got {:?}", other),
     }
 }
@@ -363,7 +363,7 @@ fn run_fib(n: u32) -> i64 {
     vm.clone().run(main_chunk, ctx);
 
     match vm.get_global(idx) {
-        Some(Value::Int(v)) => v,
+        Some(v) if v.is_int() => v.as_i64(),
         other => panic!("Expected Int, got {:?}", other),
     }
 }

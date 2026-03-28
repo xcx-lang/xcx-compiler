@@ -1,0 +1,115 @@
+--- test_collections.xcx
+--- Array, Set, Map, Table
+
+>! "Running test_collections.xcx...";
+
+--- 1. Arrays
+array:i: nums {10, 20, 30};
+if (nums.size() != 3) then; halt.error >! "Array size failed"; end;
+if (nums.get(1) != 20) then; halt.error >! "Array get failed"; end;
+
+nums.push(40);
+if (nums.size() != 4 OR nums.get(3) != 40) then; halt.error >! "Array push failed"; end;
+
+i: popped = nums.pop();
+if (popped != 40 OR nums.size() != 3) then; halt.error >! "Array pop failed"; end;
+
+nums.insert(1, 15);
+if (nums.get(1) != 15 OR nums.get(2) != 20) then; halt.error >! "Array insert failed"; end;
+
+nums.update(0, 5);
+if (nums.get(0) != 5) then; halt.error >! "Array update failed"; end;
+
+nums.delete(3);
+if (nums.size() != 3) then; halt.error >! "Array delete failed"; end;
+
+if (nums.find(20) != 2) then; halt.error >! "Array find failed"; end;
+if (NOT nums.contains(15)) then; halt.error >! "Array contains failed"; end;
+
+nums.sort();
+if (nums.get(0) != 5 OR nums.get(1) != 15 OR nums.get(2) != 20) then; halt.error >! "Array sort failed"; end;
+
+nums.reverse();
+if (nums.get(0) != 20) then; halt.error >! "Array reverse failed"; end;
+
+nums.clear();
+if (NOT nums.isEmpty()) then; halt.error >! "Array clear/isEmpty failed"; end;
+
+--- 2. Sets
+set:N: setN {0, 1, 2};
+set:Z: setZ {-1, 0, 1};
+set:Q: setQ {0.5, 1.5};
+set:S: setS {"a", "b"};
+set:B: setB {true, false};
+set:C: setC {"A", "B"};
+
+if (setN.size() != 3 OR setZ.size() != 3 OR setQ.size() != 2 OR setS.size() != 2 OR setB.size() != 2 OR setC.size() != 2) then;
+    halt.error >! "Set types/initialization failed";
+end;
+
+--- Ranges
+set:N: range1 {1,,5};
+if (range1.size() != 5) then; halt.error >! "Set range failed"; end;
+
+set:N: step1 {0,,10 @step 2};
+if (step1.size() != 6) then; halt.error >! "Set step failed"; end;
+
+--- Methods
+range1.add(10);
+if (NOT range1.contains(10)) then; halt.error >! "Set add failed"; end;
+
+range1.remove(1);
+if (range1.contains(1)) then; halt.error >! "Set remove failed"; end;
+
+--- Random Choice (must work on sets)
+i: p_random = random.choice from setN;
+if (NOT setN.contains(p_random)) then; halt.error >! "Random choice from set failed"; end;
+
+--- 3. Maps
+map: m_map {
+    schema = [s <-> i]
+    data = [ "alice" :: 30, "bob" :: 25 ]
+};
+
+if (m_map.size() != 2) then; halt.error >! "Map size failed"; end;
+if (m_map.get("alice") != 30) then; halt.error >! "Map get failed"; end;
+if (NOT m_map.contains("bob")) then; halt.error >! "Map contains failed"; end;
+
+m_map.insert("charlie", 20);
+if (m_map.get("charlie") != 20) then; halt.error >! "Map insert failed"; end;
+
+m_map.remove("alice");
+if (m_map.contains("alice")) then; halt.error >! "Map remove failed"; end;
+
+array:s: keys = m_map.keys();
+if (keys.size() != 2) then; halt.error >! "Map keys failed"; end;
+
+--- 4. Tables
+table: t_table {
+    columns = [ id :: i @auto, name :: s, price :: f ]
+    rows = [ ("item1", 10.0), ("item2", 20.0) ]
+};
+
+if (t_table.count() != 2) then; halt.error >! "Table count failed"; end;
+if (t_table[0].name != "item1") then; halt.error >! "Table get failed"; end;
+
+t_table.insert("item3", 30.0);
+if (t_table.count() != 3) then; halt.error >! "Table insert failed"; end;
+
+--- @auto increment check
+if (t_table[2].id <= t_table[1].id) then; halt.error >! "Table @auto failed"; end;
+
+t_table.update(1, ["item2_updated", 25.0]);
+if (t_table[1].name != "item2_updated") then; halt.error >! "Table update failed"; end;
+
+--- Where
+table: filtered = t_table.where(price > 15.0);
+if (filtered.count() != 2) then; halt.error >! "Table where failed"; end;
+
+--- Table joins
+table: tA { columns = [id_a::i, val_a::s] rows = [ (1, "A"), (2, "B") ] };
+table: tB { columns = [id_b::i, data_b::s] rows = [ (1, "Data1"), (2, "Data2") ] };
+table: tJ = tA.join(tB, "id_a", "id_b");
+if (tJ.count() != 2) then; halt.error >! "Table join failed"; end;
+
+>! "test_collections.xcx passed.";

@@ -1,13 +1,11 @@
 use std::sync::Arc;
-use parking_lot::RwLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use parking_lot::{RwLock, RwLockWriteGuard, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering, AtomicPtr};
 pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
-
 use argon2::password_hash::{PasswordHasher, PasswordVerifier, PasswordHash, SaltString};
+use std::io::Write;
+use std::ptr;
 use rand::Rng;
-
-
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MethodKind {
@@ -19,172 +17,198 @@ pub enum MethodKind {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OpCode {
-    Constant(usize),
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Pow,
-    Equal,
-    NotEqual,
-    Greater,
-    Less,
-    GreaterEqual,
-    LessEqual,
-    Print,
-    GetVar(usize),
-    SetVar(usize),
-    GetLocal(usize),
-    SetLocal(usize),
-    Pop,
-    Jump(usize),
-    JumpIfFalse(usize),
-    JumpIfTrue(usize),
-    And,
-    Or,
-    Not,
-    Has,
-    Input,
-    HaltAlert,
-    HaltError,
-    HaltFatal,
+    Move { dst: u8, src: u8 },
+    LoadConst { dst: u8, idx: u32 },
+    
+    Add { dst: u8, src1: u8, src2: u8 },
+    Sub { dst: u8, src1: u8, src2: u8 },
+    Mul { dst: u8, src1: u8, src2: u8 },
+    Div { dst: u8, src1: u8, src2: u8 },
+    Mod { dst: u8, src1: u8, src2: u8 },
+    Pow { dst: u8, src1: u8, src2: u8 },
+    
+    Equal { dst: u8, src1: u8, src2: u8 },
+    NotEqual { dst: u8, src1: u8, src2: u8 },
+    Greater { dst: u8, src1: u8, src2: u8 },
+    Less { dst: u8, src1: u8, src2: u8 },
+    GreaterEqual { dst: u8, src1: u8, src2: u8 },
+    LessEqual { dst: u8, src1: u8, src2: u8 },
+    
+    And { dst: u8, src1: u8, src2: u8 },
+    Or { dst: u8, src1: u8, src2: u8 },
+    Not { dst: u8, src: u8 },
+    Has { dst: u8, src1: u8, src2: u8 },
+    
+    GetVar { dst: u8, idx: u32 },
+    SetVar { idx: u32, src: u8 },
+
+    Jump { target: u32 },
+    JumpIfFalse { src: u8, target: u32 },
+    JumpIfTrue { src: u8, target: u32 },
+    
+    Print { src: u8 },
+    Input { dst: u8 },
+    HaltAlert { src: u8 }, 
+    HaltError { src: u8 }, 
+    HaltFatal { src: u8 },
     TerminalExit,
+    TerminalRun { dst: u8, cmd_src: u8 },
+
     TerminalClear,
-    Call(usize, usize),
-    Return,
+
+    
+    Call { dst: u8, func_idx: u32, base: u8, arg_count: u8 },
+    Return { src: u8 },
     ReturnVoid,
     Halt,
-    ArrayInit(usize),
-    MethodCall(MethodKind, usize),
-    MethodCallCustom(usize, usize),
-    SetInit(usize),
-    SetUnion,
-    SetIntersection,
-    SetDifference,
-    SetSymDifference,
-    RandomChoice,
-    IntConcat,
-    SetRange,
-    MapInit(usize),
-    StoreWrite,
-    StoreRead,
-    StoreAppend,
-    StoreExists,
-    StoreDelete,
-    TableInit(usize, usize),
-    JsonParse,
-    DateNow,
-    JsonBind(usize),
-    JsonBindLocal(usize),
-    JsonInject(usize),
-    JsonInjectLocal(usize),
-    FiberCreate(usize, usize),
-    Yield,
+
+    // Collections
+    ArrayInit { dst: u8, base: u8, count: u32 },
+    SetInit { dst: u8, base: u8, count: u32 },
+    MapInit { dst: u8, base: u8, count: u32 },
+    TableInit { dst: u8, skeleton_idx: u32, base: u8, row_count: u32 },
+    
+    MethodCall { dst: u8, kind: MethodKind, base: u8, arg_count: u8 },
+    MethodCallCustom { dst: u8, method_name_idx: u32, base: u8, arg_count: u8 },
+
+    SetUnion { dst: u8, src1: u8, src2: u8 },
+    SetIntersection { dst: u8, src1: u8, src2: u8 },
+    SetDifference { dst: u8, src1: u8, src2: u8 },
+    SetSymDifference { dst: u8, src1: u8, src2: u8 },
+    RandomChoice { dst: u8, src: u8 },
+    IntConcat { dst: u8, src1: u8, src2: u8 },
+    SetRange { dst: u8, start: u8, end: u8, step: u8, has_step: u8 },
+
+    // Store operations
+    StoreWrite { base: u8 }, 
+    StoreRead { dst: u8, base: u8 },
+    StoreAppend { base: u8 },
+    StoreExists { dst: u8, base: u8 },
+    StoreDelete { base: u8 },
+
+    // JSON/Date
+    JsonParse { dst: u8, src: u8 },
+    DateNow { dst: u8 },
+    JsonBind { idx: u32, json_src: u8, path_src: u8 },
+    JsonBindLocal { dst: u8, json_src: u8, path_src: u8 },
+    JsonInject { table_idx: u32, json_src: u8, mapping_src: u8 },
+    JsonInjectLocal { table_reg: u8, json_src: u8, mapping_src: u8 },
+
+    // Fibers/Concurrency
+    FiberCreate { dst: u8, func_idx: u32, base: u8, arg_count: u8 },
+    Yield { src: u8 },
     YieldVoid,
-    HttpCall(usize), // method index
-    HttpRequest,     // pop map
-    HttpRespond,     // pop status, body, [headers]
-    HttpServe(usize), // pop port, [host], [workers], routes; name index
-    Wait,             // pop Int(ms), sleep synchronously
-    EnvGet,           // pop String(var_name), push String(value) or halt
-    CryptoHash,       // pop password, algo
-    CryptoVerify,     // pop password, hash, algo
-    CryptoToken,      // pop length
-    CastInt,
-    CastFloat,
-    CastString,
-    CastBool,
-    EnvArgs,
-    TerminalRun,
+    Wait { src: u8 },
+
+    // HTTP
+    HttpCall { dst: u8, method_idx: u32, url_src: u8, body_src: u8 },
+    HttpRequest { dst: u8, arg_src: u8 },
+    HttpRespond { status_src: u8, body_src: u8, headers_src: u8 },
+    HttpServe { func_idx: u32, port_src: u8, host_src: u8, workers_src: u8, routes_src: u8 },
+
+    // Misc and Casts
+    EnvGet { dst: u8, src: u8 },
+    EnvArgs { dst: u8 },
+    CryptoHash { dst: u8, pass_src: u8, alg_src: u8 },
+    CryptoVerify { dst: u8, pass_src: u8, hash_src: u8, alg_src: u8 },
+    CryptoToken { dst: u8, len_src: u8 },
+    
+    CastInt { dst: u8, src: u8 },
+    CastFloat { dst: u8, src: u8 },
+    CastString { dst: u8, src: u8 },
+    CastBool { dst: u8, src: u8 },
+
+    // Optimizations
+    IncLocal { reg: u8 },
+    LoopNext { reg: u8, limit_reg: u8, target: u32 },
+    IncLocalLoopNext { inc_reg: u8, reg: u8, limit_reg: u8, target: u32 },
+    IncVar { idx: u32 },
+    IncVarLoopNext { g_idx: u32, reg: u8, limit_reg: u8, target: u32 },
+}
+
+#[derive(Clone, Debug)]
+pub enum TraceOp {
+    LoadConst { dst: u8, val: Value },
+    Move      { dst: u8, src: u8   },
+
+    // Integer arithmetic (all operands must be NaN-boxed ints)
+    AddInt { dst: u8, src1: u8, src2: u8 },
+    SubInt { dst: u8, src1: u8, src2: u8 },
+    MulInt { dst: u8, src1: u8, src2: u8 },
+    DivInt { dst: u8, src1: u8, src2: u8, fail_ip: usize },
+    ModInt { dst: u8, src1: u8, src2: u8, fail_ip: usize },
+
+    // Float arithmetic
+    AddFloat { dst: u8, src1: u8, src2: u8 },
+    SubFloat { dst: u8, src1: u8, src2: u8 },
+    MulFloat { dst: u8, src1: u8, src2: u8 },
+    DivFloat { dst: u8, src1: u8, src2: u8, fail_ip: usize },
+    ModFloat { dst: u8, src1: u8, src2: u8, fail_ip: usize },
+
+    IncLocal { reg: u8 },
+    IncVar   { g_idx: u32 },
+
+    GetVar { dst: u8, idx: u32 },
+    SetVar { idx: u32, src: u8 },
+
+    GuardInt   { reg: u8, ip: usize },
+    GuardFloat { reg: u8, ip: usize },
+
+    CmpInt   { dst: u8, src1: u8, src2: u8, cc: u8 },
+    CmpFloat { dst: u8, src1: u8, src2: u8, cc: u8 },
+    
+    CastIntToFloat { dst: u8, src: u8 },
+
+    GuardTrue  { reg: u8, fail_ip: usize },
+    GuardFalse { reg: u8, fail_ip: usize },
+
+    // Loop control
+    LoopNextInt      { reg: u8, limit_reg: u8, target: u32, exit_ip: usize },
+    IncVarLoopNext   { g_idx: u32, reg: u8, limit_reg: u8, target: u32, exit_ip: usize },
+    IncLocalLoopNext { inc_reg: u8, reg: u8, limit_reg: u8, target: u32, exit_ip: usize },
+
+    // Logic ops
+    And { dst: u8, src1: u8, src2: u8 },
+    Or  { dst: u8, src1: u8, src2: u8 },
+    Not { dst: u8, src: u8 },
+
+    Jump { target_ip: usize },
+}
+
+#[derive(Debug)]
+pub struct Trace {
+    pub ops: Vec<TraceOp>,
+    pub start_ip: usize,
+    pub native_ptr: std::sync::atomic::AtomicPtr<u8>,
+}
+
+pub struct RowRef {
+    pub table: Arc<RwLock<TableData>>,
+    pub row_idx: u32,
 }
 
 #[derive(Debug, Clone)]
-pub enum Value {
-    Int(i64),
-    Float(f64),
-    String(String),
-    Bool(bool),
-    Array(Arc<RwLock<Vec<Value>>>),
-    Set(Arc<RwLock<std::collections::BTreeSet<Value>>>),
-    Map(Arc<RwLock<Vec<(Value, Value)>>>),
-    Date(chrono::NaiveDateTime),
-    Table(Arc<RwLock<TableData>>),
-    Function(usize),
-    Row(Arc<RwLock<TableData>>, usize),
-    Json(Arc<RwLock<serde_json::Value>>),
-    Fiber(Arc<RwLock<FiberState>>),
+pub struct SetData {
+    pub elements: std::collections::BTreeSet<Value>,
+    pub cache: Option<Vec<Value>>,
 }
 
-impl Eq for Value {}
+#[derive(Debug, Clone, Copy)]
+pub struct Value(pub u64);
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Value::Int(a), Value::Int(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => a.to_bits() == b.to_bits(),
-            (Value::String(a), Value::String(b)) => a == b,
-            (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Array(a), Value::Array(b)) => Arc::ptr_eq(a, b) || *a.read() == *b.read(),
-            (Value::Set(a), Value::Set(b)) => Arc::ptr_eq(a, b) || *a.read() == *b.read(),
-            (Value::Map(a), Value::Map(b)) => Arc::ptr_eq(a, b) || *a.read() == *b.read(),
-            (Value::Date(a), Value::Date(b)) => a == b,
-            (Value::Table(a), Value::Table(b)) => Arc::ptr_eq(a, b),
-            (Value::Function(a), Value::Function(b)) => a == b,
-            (Value::Row(a, ai), Value::Row(b, bi)) => Arc::ptr_eq(a, b) && ai == bi,
-            (Value::Json(a), Value::Json(b)) => Arc::ptr_eq(a, b) || *a.read() == *b.read(),
-            (Value::Fiber(a), Value::Fiber(b)) => Arc::ptr_eq(a, b),
-            _ => false,
+        if self.is_float() && other.is_float() {
+            return self.as_f64() == other.as_f64();
         }
+        if self.is_string() && other.is_string() {
+            return *self.as_string() == *other.as_string();
+        }
+        self.0 == other.0
     }
 }
 
-impl Ord for Value {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match (self, other) {
-            (Value::Int(a), Value::Int(b)) => a.cmp(b),
-            (Value::Float(a), Value::Float(b)) => a.total_cmp(b),
-            (Value::Int(a), Value::Float(b)) => (*a as f64).total_cmp(b),
-            (Value::Float(a), Value::Int(b)) => a.total_cmp(&(*b as f64)),
-            (Value::String(a), Value::String(b)) => a.cmp(b),
-            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-            (Value::Date(a), Value::Date(b)) => a.cmp(b),
-            (Value::Function(a), Value::Function(b)) => a.cmp(b),
-            (a, b) if a.is_numeric() && b.is_numeric() => std::cmp::Ordering::Equal,
-            (a, b) if a.variant_rank() != b.variant_rank() => a.variant_rank().cmp(&b.variant_rank()),
-            (Value::Array(a), Value::Array(b)) => {
-                if Arc::ptr_eq(a, b) { std::cmp::Ordering::Equal }
-                else { a.read().cmp(&b.read()) }
-            }
-            (Value::Set(a), Value::Set(b)) => {
-                if Arc::ptr_eq(a, b) { std::cmp::Ordering::Equal }
-                else { a.read().cmp(&b.read()) }
-            }
-            (Value::Table(a), Value::Table(b)) => (Arc::as_ptr(a) as usize).cmp(&(Arc::as_ptr(b) as usize)),
-            (Value::Row(a, ai), Value::Row(b, bi)) => {
-                if Arc::ptr_eq(a, b) { ai.cmp(bi) }
-                else { (Arc::as_ptr(a) as usize).cmp(&(Arc::as_ptr(b) as usize)) }
-            }
-            (Value::Json(a), Value::Json(b)) => a.read().to_string().cmp(&b.read().to_string()),
-            (Value::Fiber(a), Value::Fiber(b)) => (Arc::as_ptr(a) as usize).cmp(&(Arc::as_ptr(b) as usize)),
-            (Value::Map(a), Value::Map(b)) => {
-                if Arc::ptr_eq(a, b) { std::cmp::Ordering::Equal }
-                else {
-                    let am = a.read();
-                    let bm = b.read();
-                    am.len().cmp(&bm.len()).then_with(|| {
-                        for (ai, bi) in am.iter().zip(bm.iter()) {
-                            let c = ai.0.cmp(&bi.0).then_with(|| ai.1.cmp(&bi.1));
-                            if c != std::cmp::Ordering::Equal { return c; }
-                        }
-                        std::cmp::Ordering::Equal
-                    })
-                }
-            }
-            _ => std::cmp::Ordering::Equal,
-        }
-    }
-}
+impl Eq for Value {}
 
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -192,29 +216,217 @@ impl PartialOrd for Value {
     }
 }
 
-impl Value {
-    fn is_numeric(&self) -> bool {
-        matches!(self, Value::Int(_) | Value::Float(_))
-    }
-
-    fn variant_rank(&self) -> usize {
-        match self {
-            Value::Int(_) => 0,
-            Value::Float(_) => 1,
-            Value::String(_) => 2,
-            Value::Bool(_) => 3,
-            Value::Date(_) => 4,
-            Value::Array(_) => 5,
-            Value::Set(_) => 6,
-            Value::Map(_) => 7,
-            Value::Table(_) => 8,
-            Value::Function(_) => 9,
-            Value::Row(_, _) => 10,
-            Value::Json(_) => 11,
-            Value::Fiber(_) => 12,
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let r1 = self.variant_rank();
+        let r2 = other.variant_rank();
+        if r1 != r2 { return r1.cmp(&r2); }
+        
+        if self.is_int() && other.is_int() { return self.as_i64().cmp(&other.as_i64()); }
+        if self.is_float() && other.is_float() {
+            return self.as_f64().partial_cmp(&other.as_f64()).unwrap_or(std::cmp::Ordering::Equal);
         }
+        if self.is_bool() && other.is_bool() { return self.as_bool().cmp(&other.as_bool()); }
+        
+        if self.is_ptr() && other.is_ptr() {
+            let tag = self.0 & 0x000F_0000_0000_0000;
+            if tag == TAG_STR { return self.as_string().cmp(&other.as_string()); }
+            if tag == TAG_DATE { return self.as_date().cmp(&other.as_date()); }
+        }
+        
+        self.0.cmp(&other.0)
     }
 }
+
+pub const QNAN_BASE: u64 = 0x7FF0_0000_0000_0000;
+pub const TAG_INT:   u64 = 0x0001_0000_0000_0000;
+pub const TAG_BOOL:  u64 = 0x0002_0000_0000_0000;
+pub const TAG_DATE:  u64 = 0x0003_0000_0000_0000;
+pub const TAG_STR:   u64 = 0x0004_0000_0000_0000;
+pub const TAG_ARR:   u64 = 0x0005_0000_0000_0000;
+pub const TAG_SET:   u64 = 0x0006_0000_0000_0000;
+pub const TAG_MAP:   u64 = 0x0007_0000_0000_0000;
+pub const TAG_TBL:   u64 = 0x0008_0000_0000_0000;
+pub const TAG_FUNC:  u64 = 0x0009_0000_0000_0000;
+pub const TAG_ROW:   u64 = 0x000A_0000_0000_0000;
+pub const TAG_JSON:  u64 = 0x000B_0000_0000_0000;
+pub const TAG_FIB:   u64 = 0x000C_0000_0000_0000;
+
+impl Value {
+    #[inline] pub fn from_f64(f: f64) -> Self {
+        let b = f.to_bits();
+        if (b & QNAN_BASE) == QNAN_BASE { Self(QNAN_BASE | 0x1) }
+        else { Self(b) }
+    }
+    #[inline] pub fn from_i64(i: i64) -> Self { Self(QNAN_BASE | TAG_INT | ((i as u64) & 0x0000_FFFF_FFFF_FFFF)) }
+    #[inline] pub fn from_bool(b: bool) -> Self { Self(QNAN_BASE | TAG_BOOL | (if b { 1 } else { 0 })) }
+    
+    #[inline] pub fn pack_ptr<T>(ptr: *const T, tag: u64) -> Self {
+        Self(QNAN_BASE | tag | (ptr as u64 & 0x0000_FFFF_FFFF_FFFF))
+    }
+    #[inline] pub fn unpack_ptr<T>(&self) -> *const T {
+        (self.0 & 0x0000_FFFF_FFFF_FFFF) as *const T
+    }
+
+    #[inline] pub fn is_float(&self) -> bool { (self.0 & 0x7FF0_0000_0000_0000) != 0x7FF0_0000_0000_0000 }
+    #[inline] pub fn is_int(&self)   -> bool { (self.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_INT) }
+    #[inline] pub fn is_bool(&self)  -> bool { (self.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_BOOL) }
+    #[inline] pub fn is_ptr(&self)   -> bool { 
+        (self.0 & 0xFFF0_0000_0000_0000) == QNAN_BASE && (self.0 & 0x000F_0000_0000_0000) >= TAG_STR
+    }
+    #[inline] pub fn is_string(&self) -> bool { (self.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_STR) }
+    #[inline] pub fn is_date(&self)   -> bool { (self.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_DATE) }
+    #[inline] pub fn is_func(&self)   -> bool { (self.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_FUNC) }
+    #[inline] pub fn is_array(&self)  -> bool { (self.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_ARR) }
+    #[inline] pub fn is_map(&self)    -> bool { (self.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_MAP) }
+
+    #[inline] pub fn as_f64(&self) -> f64 { f64::from_bits(self.0) }
+    #[inline] pub fn as_i64(&self) -> i64 { 
+        let val = self.0 & 0x0000_FFFF_FFFF_FFFF;
+        if val & 0x0000_8000_0000_0000 != 0 { (val | 0xFFFF_0000_0000_0000) as i64 }
+        else { val as i64 }
+    }
+    #[inline] pub fn as_bool(&self) -> bool { (self.0 & 1) != 0 }
+
+    #[inline]
+    pub unsafe fn inc_ref(&self) {
+        if !self.is_ptr() { return; }
+        let tag = self.0 & 0x000F_0000_0000_0000;
+        let p = self.unpack_ptr::<()>();
+        match tag {
+            TAG_STR  => { unsafe { Arc::increment_strong_count(p as *const String); } }
+            TAG_ARR  => { unsafe { Arc::increment_strong_count(p as *const RwLock<Vec<Value>>); } }
+            TAG_SET  => { unsafe { Arc::increment_strong_count(p as *const RwLock<SetData>); } }
+            TAG_MAP  => { unsafe { Arc::increment_strong_count(p as *const RwLock<Vec<(Value, Value)>>); } }
+            TAG_TBL  => { unsafe { Arc::increment_strong_count(p as *const RwLock<TableData>); } }
+            TAG_JSON => { unsafe { Arc::increment_strong_count(p as *const RwLock<serde_json::Value>); } }
+            TAG_FIB  => { unsafe { Arc::increment_strong_count(p as *const RwLock<FiberState>); } }
+            TAG_ROW  => { unsafe { Arc::increment_strong_count(p as *const RowRef); } }
+            _ => {}
+        }
+    }
+
+    #[inline]
+    pub unsafe fn dec_ref(&self) {
+        if !self.is_ptr() { return; }
+        let tag = self.0 & 0x000F_0000_0000_0000;
+        let p = self.unpack_ptr::<()>();
+        match tag {
+            TAG_STR  => { unsafe { Arc::decrement_strong_count(p as *const String); } }
+            TAG_ARR  => { unsafe { Arc::decrement_strong_count(p as *const RwLock<Vec<Value>>); } }
+            TAG_SET  => { unsafe { Arc::decrement_strong_count(p as *const RwLock<SetData>); } }
+            TAG_MAP  => { unsafe { Arc::decrement_strong_count(p as *const RwLock<Vec<(Value, Value)>>); } }
+            TAG_TBL  => { unsafe { Arc::decrement_strong_count(p as *const RwLock<TableData>); } }
+            TAG_JSON => { unsafe { Arc::decrement_strong_count(p as *const RwLock<serde_json::Value>); } }
+            TAG_FIB  => { unsafe { Arc::decrement_strong_count(p as *const RwLock<FiberState>); } }
+            TAG_ROW  => { unsafe { Arc::decrement_strong_count(p as *const RowRef); } }
+            _ => {}
+        }
+    }
+
+    #[inline] pub fn is_numeric(&self) -> bool { self.is_float() || self.is_int() }
+    
+    pub fn variant_rank(&self) -> u8 {
+        if self.is_float() { 1 }
+        else if self.is_int() { 0 }
+        else if (self.0 & 0xFFF0_0000_0000_0000) == QNAN_BASE {
+            let tag = self.0 & 0x000F_0000_0000_0000;
+            match tag {
+                TAG_BOOL => 2,
+                TAG_STR  => 3,
+                TAG_ARR  => 4,
+                TAG_SET  => 5,
+                TAG_MAP  => 6,
+                TAG_DATE => 7,
+                TAG_TBL  => 8,
+                TAG_FUNC => 9,
+                TAG_ROW  => 10,
+                TAG_JSON => 11,
+                TAG_FIB  => 12,
+                _ => 255,
+            }
+        } else { 255 }
+    }
+
+    #[inline] pub fn from_string(s: Arc<String>) -> Self { Self::pack_ptr(Arc::into_raw(s), TAG_STR) }
+    #[inline] pub fn from_array(a: Arc<RwLock<Vec<Value>>>) -> Self { Self::pack_ptr(Arc::into_raw(a), TAG_ARR) }
+    #[inline] pub fn from_set(s: Arc<RwLock<SetData>>) -> Self { Self::pack_ptr(Arc::into_raw(s), TAG_SET) }
+    #[inline] pub fn from_map(m: Arc<RwLock<Vec<(Value, Value)>>>) -> Self { Self::pack_ptr(Arc::into_raw(m), TAG_MAP) }
+    #[inline] pub fn from_table(t: Arc<RwLock<TableData>>) -> Self { Self::pack_ptr(Arc::into_raw(t), TAG_TBL) }
+    #[inline] pub fn from_json(j: Arc<RwLock<serde_json::Value>>) -> Self { Self::pack_ptr(Arc::into_raw(j), TAG_JSON) }
+    #[inline] pub fn from_fiber(f: Arc<RwLock<FiberState>>) -> Self { Self::pack_ptr(Arc::into_raw(f), TAG_FIB) }
+    #[inline] pub fn from_date(ts: i64) -> Self { Self(QNAN_BASE | TAG_DATE | (ts as u64 & 0x0000_FFFF_FFFF_FFFF)) }
+    #[inline] pub fn from_function(id: u32) -> Self { Self(QNAN_BASE | TAG_FUNC | (id as u64)) }
+    #[inline] pub fn from_row(r: Arc<RowRef>) -> Self { Self::pack_ptr(Arc::into_raw(r), TAG_ROW) }
+
+    pub fn as_string(&self) -> Arc<String> { unsafe { let p = self.unpack_ptr::<String>(); let arc = Arc::from_raw(p); let cl = arc.clone(); std::mem::forget(arc); cl } }
+    pub fn as_array(&self) -> Arc<RwLock<Vec<Value>>> { unsafe { let p = self.unpack_ptr::<RwLock<Vec<Value>>>(); let arc = Arc::from_raw(p); let cl = arc.clone(); std::mem::forget(arc); cl } }
+    pub fn as_set(&self) -> Arc<RwLock<SetData>> { unsafe { let p = self.unpack_ptr::<RwLock<SetData>>(); let arc = Arc::from_raw(p); let cl = arc.clone(); std::mem::forget(arc); cl } }
+    pub fn as_map(&self) -> Arc<RwLock<Vec<(Value, Value)>>> { unsafe { let p = self.unpack_ptr::<RwLock<Vec<(Value, Value)>>>(); let arc = Arc::from_raw(p); let cl = arc.clone(); std::mem::forget(arc); cl } }
+    pub fn as_table(&self) -> Arc<RwLock<TableData>> { unsafe { let p = self.unpack_ptr::<RwLock<TableData>>(); let arc = Arc::from_raw(p); let cl = arc.clone(); std::mem::forget(arc); cl } }
+    pub fn as_json(&self) -> Arc<RwLock<serde_json::Value>> { unsafe { let p = self.unpack_ptr::<RwLock<serde_json::Value>>(); let arc = Arc::from_raw(p); let cl = arc.clone(); std::mem::forget(arc); cl } }
+    pub fn as_fiber(&self) -> Arc<RwLock<FiberState>> { unsafe { let p = self.unpack_ptr::<RwLock<FiberState>>(); let arc = Arc::from_raw(p); let cl = arc.clone(); std::mem::forget(arc); cl } }
+    pub fn as_row(&self) -> Arc<RowRef> { unsafe { let p = self.unpack_ptr::<RowRef>(); let arc = Arc::from_raw(p); let cl = arc.clone(); std::mem::forget(arc); cl } }
+    #[inline] pub fn as_date(&self) -> i64 { (self.0 & 0x0000_FFFF_FFFF_FFFF) as i64 }
+    #[inline] pub fn as_function(&self) -> u32 { (self.0 & 0x0000_FFFF_FFFF_FFFF) as u32 }
+
+    pub fn to_string(&self) -> String {
+        if self.is_float() { self.as_f64().to_string() }
+        else if self.is_int() { self.as_i64().to_string() }
+        else if self.is_bool() { self.as_bool().to_string() }
+        else if self.is_ptr() {
+            let tag = self.0 & 0x000F_0000_0000_0000;
+            match tag {
+                TAG_STR => { unsafe { (&*(self.unpack_ptr::<String>())).clone() } }
+                TAG_DATE => { 
+                    let ts = self.as_date(); 
+                    let dt = chrono::DateTime::from_timestamp_millis(ts).unwrap().naive_utc();
+                    dt.format("%Y-%m-%d").to_string()
+                }
+                TAG_JSON => {
+                    let arc = self.as_json();
+                    arc.read().to_string()
+                }
+                TAG_ARR  => { 
+                    let arc = self.as_array();
+                    let a = arc.read();
+                    let mut s = "[".to_string();
+                    for (i, val) in a.iter().enumerate() {
+                        if i > 0 { s.push_str(", "); }
+                        s.push_str(&val.to_string());
+                    }
+                    s.push(']');
+                    s
+                }
+                TAG_SET  => {
+                    let arc = self.as_set();
+                    let set_data = arc.read();
+                    let mut s = "{".to_string();
+                    for (i, val) in set_data.elements.iter().enumerate() {
+                        if i > 0 { s.push_str(", "); }
+                        s.push_str(&val.to_string());
+                    }
+                    s.push('}');
+                    s
+                }
+                TAG_MAP  => {
+                    let arc = self.as_map();
+                    let map = arc.read();
+                    let mut s = "{".to_string();
+                    for (i, (k, v)) in map.iter().enumerate() {
+                        if i > 0 { s.push_str(", "); }
+                        s.push_str(&format!("{} :: {}", k, v));
+                    }
+                    s.push('}');
+                    s
+                }
+                _ => format!("Ptr({:x})", self.0),
+            }
+        }
+        else { format!("Value({:x})", self.0) }
+    }
+}
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VMColumn {
@@ -234,7 +446,6 @@ pub struct FiberState {
     pub func_id: usize,
     pub ip: usize,
     pub locals: Vec<Value>,
-    pub stack: Vec<Value>,
     pub is_done: bool,
     pub yielded_value: Option<Value>,
 }
@@ -246,48 +457,68 @@ impl Eq for FiberState {}
 
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Value::Int(v) => write!(f, "{}", v),
-            Value::Float(v) => write!(f, "{}", v),
-            Value::String(v) => write!(f, "{}", v),
-            Value::Bool(v) => write!(f, "{}", v),
-            Value::Array(arr) => {
-                let b = arr.read();
-                write!(f, "[")?;
-                for (i, val) in b.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
-                    write!(f, "{}", val)?;
+        if self.is_float() { write!(f, "{}", self.as_f64()) }
+        else if self.is_int() { write!(f, "{}", self.as_i64()) }
+        else if self.is_bool() { write!(f, "{}", self.as_bool()) }
+        else if self.is_ptr() {
+            let tag = self.0 & 0x000F_0000_0000_0000;
+            match tag {
+                TAG_STR  => write!(f, "{}", self.as_string()),
+                TAG_ARR  => {
+                    let arc = self.as_array();
+                    let arr = arc.read();
+                    write!(f, "[")?;
+                    for (i, val) in arr.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{}", val)?;
+                    }
+                    write!(f, "]")
                 }
-                write!(f, "]")
-            }
-            Value::Set(s) => {
-                let b = s.read();
-                write!(f, "{{")?;
-                for (i, val) in b.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
-                    write!(f, "{}", val)?;
+                TAG_SET  => {
+                    let arc = self.as_set();
+                    let s = arc.read();
+                    write!(f, "{{")?;
+                    for (i, val) in s.elements.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{}", val)?;
+                    }
+                    write!(f, "}}")
                 }
-                write!(f, "}}")
-            }
-            Value::Map(m) => {
-                let b = m.read();
-                write!(f, "{{")?;
-                for (i, (k, v)) in b.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
-                    write!(f, "{} :: {}", k, v)?;
+                TAG_MAP  => {
+                    let arc = self.as_map();
+                    let m = arc.read();
+                    write!(f, "{{")?;
+                    for (i, (k, v)) in m.iter().enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
+                        write!(f, "{} :: {}", k, v)?;
+                    }
+                    write!(f, "}}")
                 }
-                write!(f, "}}")
+                TAG_DATE => {
+                    let ts = self.as_date();
+                    let dt = chrono::DateTime::from_timestamp_millis(ts).unwrap().naive_utc();
+                    write!(f, "{}", dt.format("%Y-%m-%d"))
+                }
+                TAG_TBL  => {
+                    let arc = self.as_table();
+                    write!(f, "Table(rows: {})", arc.read().rows.len())
+                }
+                TAG_FUNC => write!(f, "Function({})", self.as_function()),
+                TAG_ROW  => write!(f, "Row({})", self.as_row().row_idx),
+                TAG_JSON => {
+                    let arc = self.as_json();
+                    write!(f, "Json({})", arc.read())
+                }
+                TAG_FIB  => {
+                    let arc = self.as_fiber();
+                    let fib = arc.read();
+                    if fib.is_done { write!(f, "Fiber(done)") }
+                    else { write!(f, "Fiber(ip={})", fib.ip) }
+                }
+                _ => write!(f, "Ptr({:x})", self.0),
             }
-            Value::Date(d) => write!(f, "{}", d.format("%Y-%m-%d")),
-            Value::Table(t) => write!(f, "Table(rows: {})", t.read().rows.len()),
-            Value::Function(id) => write!(f, "Function({})", id),
-            Value::Row(_, idx) => write!(f, "Row({})", idx),
-            Value::Json(v) => write!(f, "Json({})", v.read()),
-            Value::Fiber(fiber_rc) => {
-                let fiber = fiber_rc.read();
-                if fiber.is_done { write!(f, "Fiber(done)") }
-                else { write!(f, "Fiber(ip={})", fiber.ip) }
-            }
+        } else {
+            write!(f, "Value({:x})", self.0)
         }
     }
 }
@@ -309,29 +540,29 @@ pub struct SharedContext {
 pub struct VM {
     pub globals: Arc<RwLock<Vec<Value>>>,
     pub error_count: std::sync::atomic::AtomicUsize,
-    pub servers: Arc<RwLock<std::collections::HashMap<String, Arc<tiny_http::Server>>>>,
+    pub traces: Arc<RwLock<std::collections::HashMap<usize, Arc<Trace>>>>,
+    pub jit: parking_lot::Mutex<crate::backend::jit::JIT>,
 }
-
-const MAX_CALL_DEPTH: usize = 800;
 
 #[derive(Debug, Clone)]
 enum OpResult {
     Continue,
-    Jump(usize),
     Return(Option<Value>),
     Yield(Option<Value>),
     Halt,
 }
 
+
+
 impl VM {
     pub fn new() -> Self {
-        #[cfg(windows)]
+        #[cfg(all(windows, not(test)))]
         enable_ansi_support();
-
         Self {
-            globals: Arc::new(RwLock::new(vec![Value::Bool(false); 1024])),
+            globals: Arc::new(RwLock::new(vec![Value::from_bool(false); 1024])),
             error_count: std::sync::atomic::AtomicUsize::new(0),
-            servers: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            traces: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            jit: parking_lot::Mutex::new(crate::backend::jit::JIT::new()),
         }
     }
 
@@ -344,11 +575,24 @@ impl VM {
         let mut executor = Executor {
             vm: self.clone(),
             ctx,
-            current_spans: None, // Will be set in run_frame
-            stack: Vec::with_capacity(128),
-            call_depth: 0,
+            current_spans: None,
             fiber_yielded: false,
+            hot_counts: vec![0; main_chunk.bytecode.len()],
+            recording_trace: None,
+            is_recording: false,
+            trace_cache: vec![None; main_chunk.bytecode.len()],
+            http_req: None,
+            http_req_val: None,
         };
+        // Populate initial cache
+        {
+            let traces = executor.vm.traces.read();
+            for (ip, trace) in traces.iter() {
+                if *ip < executor.trace_cache.len() {
+                    executor.trace_cache[*ip] = Some(trace.clone());
+                }
+            }
+        }
         executor.run_frame_owned(main_chunk);
     }
 }
@@ -356,18 +600,15 @@ impl VM {
 #[cfg(windows)]
 fn enable_ansi_support() {
     use std::ptr;
-
     type DWORD = u32;
     type HANDLE = *mut std::ffi::c_void;
     const STD_OUTPUT_HANDLE: DWORD = -11i32 as u32;
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = 0x0004;
-
     unsafe extern "system" {
         fn GetStdHandle(nStdHandle: DWORD) -> HANDLE;
         fn GetConsoleMode(hConsoleHandle: HANDLE, lpMode: *mut DWORD) -> i32;
         fn SetConsoleMode(hConsoleHandle: HANDLE, dwMode: DWORD) -> i32;
     }
-
     unsafe {
         let handle = GetStdHandle(STD_OUTPUT_HANDLE);
         if handle != ptr::null_mut() {
@@ -383,31 +624,21 @@ struct Executor {
     vm: Arc<VM>,
     ctx: SharedContext,
     current_spans: Option<Arc<Vec<crate::lexer::token::Span>>>,
-    stack: Vec<Value>,
-    call_depth: usize,
     fiber_yielded: bool,
+    hot_counts: Vec<usize>,
+    recording_trace: Option<Trace>,
+    is_recording: bool,
+    trace_cache: Vec<Option<Arc<Trace>>>,
+    http_req: Option<Arc<parking_lot::Mutex<Option<tiny_http::Request>>>>,
+    http_req_val: Option<Value>,
+}
+
+impl Drop for Executor {
+    fn drop(&mut self) {
+    }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-fn json_path_to_value(root: &serde_json::Value, path: &str) -> Option<Value> {
-    let pointer = normalize_json_path(path);
-    let node = if pointer.is_empty() {
-        root.clone()
-    } else {
-        root.pointer(&pointer).cloned().unwrap_or(serde_json::Value::Null)
-    };
-    if node.is_null() { return None; }
-    Some(match node {
-        serde_json::Value::Number(n) =>
-            if let Some(i) = n.as_i64() { Value::Int(i) }
-            else if let Some(f) = n.as_f64() { Value::Float(f) }
-            else { Value::Int(0) },
-        serde_json::Value::String(s) => Value::String(s),
-        serde_json::Value::Bool(b) => Value::Bool(b),
-        other => Value::Json(Arc::new(RwLock::new(other))),
-    })
-}
 
 fn inject_json_into_table(
     table: &mut TableData,
@@ -419,38 +650,28 @@ fn inject_json_into_table(
     } else {
         vec![json.clone()]
     };
-
     for item in items {
         let mut new_row = Vec::with_capacity(table.columns.len());
         for col in &table.columns {
             let mut found = false;
             for (k, v) in mapping {
-                if let (Value::String(col_match), Value::String(json_path)) = (k, v) {
-                    if col_match == &col.name {
-                        let pointer = normalize_json_path(json_path);
+                if k.is_ptr() && (k.0 & 0x000F_0000_0000_0000) == TAG_STR &&
+                   v.is_ptr() && (v.0 & 0x000F_0000_0000_0000) == TAG_STR {
+                    let col_match = k.as_string();
+                    let json_path = v.as_string();
+                    if col_match.as_ref() == col.name.as_str() {
+                        let pointer = normalize_json_path(json_path.as_ref());
                         let raw = if pointer.is_empty() { item.clone() }
-                                  else { item.pointer(&pointer).cloned().unwrap_or(serde_json::Value::Null) };
-                        new_row.push(match col.ty {
-                            crate::parser::ast::Type::Int =>
-                                raw.as_i64().map(Value::Int).unwrap_or(Value::Int(0)),
-                            crate::parser::ast::Type::Float =>
-                                raw.as_f64().map(Value::Float).unwrap_or(Value::Float(0.0)),
-                            crate::parser::ast::Type::Bool =>
-                                raw.as_bool().map(Value::Bool).unwrap_or(Value::Bool(false)),
-                            crate::parser::ast::Type::String =>
-                                Value::String(raw.as_str().unwrap_or("").to_string()),
-                            _ => Value::String(raw.to_string()),
-                        });
+                        else { item.pointer(&pointer).cloned().unwrap_or(serde_json::Value::Null) };
+                        let val = json_serde_to_value(&raw);
+                        new_row.push(val);
                         found = true;
                         break;
                     }
                 }
             }
             if !found {
-                new_row.push(match col.ty {
-                    crate::parser::ast::Type::Int => Value::Int(0),
-                    _ => Value::String("".to_string()),
-                });
+                new_row.push(Value::from_bool(false));
             }
         }
         table.rows.push(new_row);
@@ -463,14 +684,21 @@ fn set_op(
     op: u8,
 ) -> std::collections::BTreeSet<Value> {
     match op {
-        0 => { let mut r = a.clone(); r.extend(b.iter().cloned()); r }
-        1 => a.iter().filter(|x| b.contains(x)).cloned().collect(),
-        2 => a.iter().filter(|x| !b.contains(x)).cloned().collect(),
-        _ => a.symmetric_difference(b).cloned().collect(),
+        0 => { 
+            let mut r = a.clone(); 
+            for v in b { unsafe { v.inc_ref(); } r.insert(*v); }
+            r 
+        }
+        1 => a.iter().filter(|x| b.contains(x)).map(|x| { unsafe { x.inc_ref(); } *x }).collect(),
+        2 => a.iter().filter(|x| !b.contains(x)).map(|x| { unsafe { x.inc_ref(); } *x }).collect(),
+        _ => {
+            let mut res = std::collections::BTreeSet::new();
+            for x in a.iter().filter(|x| !b.contains(x)) { unsafe { x.inc_ref(); } res.insert(*x); }
+            for x in b.iter().filter(|x| !a.contains(x)) { unsafe { x.inc_ref(); } res.insert(*x); }
+            res
+        }
     }
 }
-
-
 
 enum JoinPred {
     Keys(String, String),
@@ -490,10 +718,9 @@ fn join_tables(
     };
     let left_col_names: std::collections::HashSet<&str> =
         left.columns.iter().map(|c| c.name.as_str()).collect();
-
     let mut out_cols: Vec<VMColumn> = left.columns.clone();
     let mut right_col_map: Vec<Option<usize>> = Vec::new();
-    for (ci, col) in right.columns.iter().enumerate() {
+    for (_ci, col) in right.columns.iter().enumerate() {
         if right_key_name == Some(col.name.as_str()) {
             right_col_map.push(None);
             continue;
@@ -505,13 +732,10 @@ fn join_tables(
         };
         right_col_map.push(Some(out_cols.len()));
         out_cols.push(VMColumn { name: out_name, ty: col.ty.clone(), is_auto: false });
-        let _ = ci;
     }
-
     let left_rc  = Arc::new(RwLock::new(left.clone()));
     let right_rc = Arc::new(RwLock::new(right.clone()));
     let mut out_rows: Vec<Vec<Value>> = Vec::new();
-
     for li in 0..left.rows.len() {
         for ri in 0..right.rows.len() {
             let matches = match pred {
@@ -524,32 +748,29 @@ fn join_tables(
                     }
                 }
                 JoinPred::Lambda(fid) => {
-                    let row_a = Value::Row(left_rc.clone(), li);
-                    let row_b = Value::Row(right_rc.clone(), ri);
-                    matches!(executor.run_frame(*fid, &[row_a, row_b]), Some(Value::Bool(true)))
+                    let row_a = Value::from_row(Arc::new(RowRef { table: left_rc.clone(), row_idx: li as u32 }));
+                    let row_b = Value::from_row(Arc::new(RowRef { table: right_rc.clone(), row_idx: ri as u32 }));
+                    let m = matches!(executor.run_frame(*fid, &[row_a, row_b]), Some(res) if res.is_bool() && res.as_bool());
+                    unsafe { row_a.dec_ref(); row_b.dec_ref(); }
+                    m
                 }
             };
-
             if matches {
-                let mut row = vec![Value::Bool(false); out_cols.len()];
-                for (ci, v) in left.rows[li].iter().enumerate() {
-                    row[ci] = v.clone();
-                }
+                let mut row = Vec::with_capacity(out_cols.len());
+                for v in &left.rows[li] { unsafe { v.inc_ref(); } row.push(*v); }
                 for (rci, out_idx) in right_col_map.iter().enumerate() {
-                    if let Some(oi) = out_idx {
-                        row[*oi] = right.rows[ri][rci].clone();
+                    if let Some(_oi) = out_idx {
+                        let v = right.rows[ri][rci];
+                        unsafe { v.inc_ref(); }
+                        row.push(v);
                     }
                 }
                 out_rows.push(row);
             }
         }
     }
-
     TableData { columns: out_cols, rows: out_rows }
 }
-
-
-
 impl Executor {
     fn current_span_info(&self, ip: usize) -> String {
         if let Some(spans) = &self.current_spans {
@@ -561,1249 +782,526 @@ impl Executor {
         "".to_string()
     }
 
-    fn execute_step(
-        &mut self,
-        op: OpCode,
-        _ip: &mut usize,
-        locals: &mut Vec<Value>,
-    ) -> OpResult {
-        match op {
-            OpCode::Constant(idx) => {
-                self.stack.push(self.ctx.constants[idx].clone());
-                OpResult::Continue
-            }
-            OpCode::GetVar(idx) => {
-                let glbs = self.vm.globals.read();
-                if idx >= glbs.len() {
-                    self.stack.push(Value::Bool(false));
-                    return OpResult::Halt;
-                }
-                self.stack.push(glbs[idx].clone());
-                OpResult::Continue
-            }
-            OpCode::SetVar(idx) => {
-                let val = self.stack.pop().expect("SetVar: empty stack");
-                let mut glbs = self.vm.globals.write();
-                if idx >= glbs.len() {
-                    glbs.resize(idx + 1, Value::Bool(false));
-                }
-                glbs[idx] = val;
-                OpResult::Continue
-            }
-            OpCode::GetLocal(idx) => {
-                self.stack.push(locals.get(idx).cloned().unwrap_or(Value::Bool(false)));
-                OpResult::Continue
-            }
-            OpCode::SetLocal(idx) => {
-                let val = self.stack.pop().expect("SetLocal: empty stack");
-                if idx >= locals.len() { locals.resize(idx + 1, Value::Bool(false)); }
-                locals[idx] = val;
-                OpResult::Continue
-            }
-            OpCode::Pop => { self.stack.pop(); OpResult::Continue }
- 
-            OpCode::Jump(offset) => OpResult::Jump(offset),
-            OpCode::JumpIfFalse(offset) => {
-                let val = self.stack.pop().unwrap_or(Value::Bool(true));
-                if matches!(val, Value::Bool(false)) { OpResult::Jump(offset) } else { OpResult::Continue }
-            }
-            OpCode::JumpIfTrue(offset) => {
-                let val = self.stack.pop().unwrap_or(Value::Bool(false));
-                if matches!(val, Value::Bool(true)) { OpResult::Jump(offset) } else { OpResult::Continue }
-            }
-            OpCode::Return    => OpResult::Return(self.stack.pop()),
-            OpCode::ReturnVoid => OpResult::Return(None),
-            OpCode::Yield     => OpResult::Yield(self.stack.pop()),
-            OpCode::YieldVoid => OpResult::Yield(None),
-            OpCode::Halt      => OpResult::Halt,
-            OpCode::TerminalExit  => OpResult::Halt,
-            OpCode::TerminalClear => {
-                #[cfg(windows)]
-                {
-                    if let Err(_) = std::process::Command::new("cmd").args(["/c", "cls"]).status() {
-                        print!("\x1B[2J\x1B[1;1H");
-                    }
-                }
-                #[cfg(not(windows))]
-                {
-                    print!("\x1B[2J\x1B[1;1H");
-                }
-                
-                use std::io::Write;
-                std::io::stdout().flush().unwrap();
-                self.stack.push(Value::Bool(true));
-                OpResult::Continue
-            }
-            OpCode::TerminalRun => {
-                let filename_val = self.stack.pop().expect("TerminalRun: empty stack");
-                let filename = match filename_val {
-                    Value::String(s) => s,
-                    other => other.to_string(),
-                };
-                
-                let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("xcx"));
-                
-                match std::process::Command::new(exe_path)
-                    .arg(&filename)
-                    .status() 
-                {
-                    Ok(status) => {
-                        self.stack.push(Value::Bool(status.success()));
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to execute !run {}: {}{}", filename, e, self.current_span_info(*_ip));
-                        self.stack.push(Value::Bool(false));
-                    }
-                }
-                OpResult::Continue
-            }
- 
-            OpCode::Wait => {
-                let ms_val = self.stack.pop().expect("Wait: expected duration on stack");
-                let ms: u64 = match ms_val {
-                    Value::Int(n) if n >= 0 => n as u64,
-                    Value::Float(f) if f >= 0.0 => f as u64,
-                    other => {
-                        eprintln!("halt.error: @wait requires a non-negative Int or Float, got {:?}{}", other, self.current_span_info(*_ip));
-                        return OpResult::Halt;
-                    }
-                };
-                std::thread::sleep(std::time::Duration::from_millis(ms));
-                OpResult::Continue
-            }
- 
-            OpCode::EnvGet => {
-                let name_val = self.stack.pop().expect("EnvGet: expected var name on stack");
-                let name = name_val.to_string();
-                match std::env::var(&name) {
-                    Ok(val) => {
-                        self.stack.push(Value::String(val));
-                    }
-                    Err(_) => {
-                        eprintln!("halt.error: env variable \"{}\" is not set{}", name, self.current_span_info(*_ip));
-                        return OpResult::Halt;
-                    }
-                }
-                OpResult::Continue
-            }
- 
-            OpCode::EnvArgs => {
-                let args: Vec<Value> = std::env::args()
-                    .map(|s| Value::String(s))
-                    .collect();
-                self.stack.push(Value::Array(Arc::new(RwLock::new(args))));
-                OpResult::Continue
-            }
- 
-            OpCode::CryptoHash => {
-                let algo_val = self.stack.pop().expect("CryptoHash: expected algo");
-                let pwd_val  = self.stack.pop().expect("CryptoHash: expected password");
-                let algo = algo_val.to_string();
-                let password = pwd_val.to_string();
- 
-                let res = match algo.as_str() {
-                    "bcrypt" => {
-                        match bcrypt::hash(&password, bcrypt::DEFAULT_COST) {
-                            Ok(h) => Value::String(h),
-                            Err(_) => { eprintln!("halt.error: bcrypt hashing failed{}", self.current_span_info(*_ip)); return OpResult::Halt; }
-                        }
-                    }
-                    "argon2" => {
-                        let mut salt_bytes = [0u8; 16];
-                        rand::rng().fill(&mut salt_bytes);
-                        let salt = SaltString::encode_b64(&salt_bytes).unwrap();
-                        let argon2_inst = argon2::Argon2::default();
-                        match argon2_inst.hash_password(password.as_bytes(), &salt) {
-                            Ok(p) => {
-                                Value::String(p.to_string())
-                            }
-                            Err(_) => { eprintln!("halt.error: argon2 hashing failed{}", self.current_span_info(*_ip)); return OpResult::Halt; }
-                        }
-                    }
-                    _ => {
-                        eprintln!("halt.error: unknown crypto algorithm: {}{}", algo, self.current_span_info(*_ip));
-                        return OpResult::Halt;
-                    }
-                };
-                self.stack.push(res);
-                OpResult::Continue
-            }
-
-            OpCode::CryptoVerify => {
-                let algo_val = self.stack.pop().expect("CryptoVerify: expected algo");
-                let hash_val = self.stack.pop().expect("CryptoVerify: expected hash");
-                let pwd_val  = self.stack.pop().expect("CryptoVerify: expected password");
-                
-                let algo = algo_val.to_string();
-                let hashed = hash_val.to_string();
-                let password = pwd_val.to_string();
-
-                let is_ok = match algo.as_str() {
-                    "bcrypt" => {
-                        bcrypt::verify(&password, &hashed).unwrap_or(false)
-                    }
-                    "argon2" => {
-                        match PasswordHash::new(&hashed) {
-                            Ok(parsed_hash) => argon2::Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok(),
-                            Err(_) => { eprintln!("halt.error: invalid argon2 hash format{}", self.current_span_info(*_ip)); return OpResult::Halt; }
-                        }
-                    }
-                    _ => {
-                        eprintln!("halt.error: unknown crypto algorithm for verification: {}{}", algo, self.current_span_info(*_ip));
-                        return OpResult::Halt;
-                    }
-                };
-                self.stack.push(Value::Bool(is_ok));
-                OpResult::Continue
-            }
-
-            OpCode::CryptoToken => {
-                let len_val = self.stack.pop().expect("CryptoToken: expected length");
-                let len = match len_val {
-                    Value::Int(n) if n > 0 => n as usize,
-                    _ => { eprintln!("halt.error: crypto.token requires a positive Int length{}", self.current_span_info(*_ip)); return OpResult::Halt; }
-                };
-                
-                let mut bytes = vec![0u8; (len + 1) / 2];
-                rand::rng().fill(&mut bytes[..]);
-                let mut hex_str = hex::encode(&bytes);
-                if hex_str.len() > len {
-                    hex_str.truncate(len);
-                }
-                self.stack.push(Value::String(hex_str));
-                OpResult::Continue
-            }
-
-            OpCode::Add => {
-                let b = self.stack.pop().expect("Add: rhs");
-                let a = self.stack.pop().expect("Add: lhs");
-                let res = match (a, b) {
-                    (Value::Int(a), Value::Int(b))     => Value::Int(a.wrapping_add(b)),
-                    (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
-                    (Value::Int(a), Value::Float(b))   => Value::Float(a as f64 + b),
-                    (Value::Float(a), Value::Int(b))   => Value::Float(a + b as f64),
-                    (Value::String(a), b)              => Value::String(format!("{}{}", a, b)),
-                    (a, Value::String(b))              => Value::String(format!("{}{}", a, b)),
-                    (Value::Date(d), Value::Int(days)) => Value::Date(d + chrono::TimeDelta::days(days)),
-                    (Value::Set(a), Value::Set(b))     => Value::Set(Arc::new(RwLock::new(
-                        set_op(&a.read(), &b.read(), 0)))),
-                    _ => Value::Bool(false),
-                };
-                self.stack.push(res);
-                OpResult::Continue
-            }
-            OpCode::Sub => {
-                let b = self.stack.pop().expect("Sub: rhs");
-                let a = self.stack.pop().expect("Sub: lhs");
-                let res = match (a, b) {
-                    (Value::Int(a), Value::Int(b))     => Value::Int(a.wrapping_sub(b)),
-                    (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
-                    (Value::Int(a), Value::Float(b))   => Value::Float(a as f64 - b),
-                    (Value::Float(a), Value::Int(b))   => Value::Float(a - b as f64),
-                    (Value::Date(d), Value::Int(days)) => Value::Date(d - chrono::TimeDelta::days(days)),
-                    (Value::Date(a), Value::Date(b))   => Value::Int((a - b).num_days()),
-                    (Value::Set(a), Value::Set(b))     => Value::Set(Arc::new(RwLock::new(
-                        set_op(&a.read(), &b.read(), 2)))),
-                    _ => Value::Bool(false),
-                };
-                self.stack.push(res);
-                OpResult::Continue
-            }
-            OpCode::Mul => {
-                let b = self.stack.pop().expect("Mul: rhs");
-                let a = self.stack.pop().expect("Mul: lhs");
-                match (a, b) {
-                    (Value::Int(a), Value::Int(b))     => self.stack.push(Value::Int(a.wrapping_mul(b))),
-                    (Value::Float(a), Value::Float(b)) => self.stack.push(Value::Float(a * b)),
-                    (Value::Int(a), Value::Float(b))   => self.stack.push(Value::Float(a as f64 * b)),
-                    (Value::Float(a), Value::Int(b))   => self.stack.push(Value::Float(a * b as f64)),
-                    (Value::Set(a), Value::Set(b))     => {
-                        self.stack.push(Value::Set(Arc::new(RwLock::new(
-                            set_op(&a.read(), &b.read(), 1)))));
-                    }
-                    (a, b) => {
-                        eprintln!("ERROR: Cannot multiply {:?} and {:?}{}", a, b, self.current_span_info(*_ip));
-                        self.stack.push(Value::Int(0));
-                        return OpResult::Halt;
-                    }
-                }
-                OpResult::Continue
-            }
-            OpCode::Div => {
-                let b = self.stack.pop().expect("Div: rhs");
-                let a = self.stack.pop().expect("Div: lhs");
-                match (a, b) {
-                    (Value::Int(a), Value::Int(b)) => {
-                        if b == 0 { eprintln!("R300: Division by zero{}", self.current_span_info(*_ip)); return OpResult::Halt; }
-                        self.stack.push(Value::Int(a / b));
-                    }
-                    (Value::Float(a), Value::Float(b)) => {
-                        if b == 0.0 { eprintln!("R300: Division by zero (float){}", self.current_span_info(*_ip)); return OpResult::Halt; }
-                        self.stack.push(Value::Float(a / b));
-                    }
-                    (Value::Int(a), Value::Float(b)) => {
-                        if b == 0.0 { eprintln!("R300: Division by zero{}", self.current_span_info(*_ip)); return OpResult::Halt; }
-                        self.stack.push(Value::Float(a as f64 / b));
-                    }
-                    (Value::Float(a), Value::Int(b)) => {
-                        if b == 0 { eprintln!("R300: Division by zero{}", self.current_span_info(*_ip)); return OpResult::Halt; }
-                        self.stack.push(Value::Float(a / b as f64));
-                    }
-                    _ => return OpResult::Halt,
-                }
-                OpResult::Continue
-            }
-            OpCode::Mod => {
-                let b = self.stack.pop().expect("Mod: rhs");
-                let a = self.stack.pop().expect("Mod: lhs");
-                match (a, b) {
-                    (Value::Int(a), Value::Int(b)) =>
-                        self.stack.push(if b != 0 { Value::Int(a % b) } else { Value::Bool(false) }),
-                    (Value::Float(a), Value::Float(b)) => self.stack.push(Value::Float(a % b)),
-                    _ => self.stack.push(Value::Bool(false)),
-                }
-                OpResult::Continue
-            }
-            OpCode::Pow => {
-                let b = self.stack.pop().expect("Pow: rhs");
-                let a = self.stack.pop().expect("Pow: lhs");
-                match (a, b) {
-                    (Value::Int(a), Value::Int(b))     => self.stack.push(Value::Int(a.pow(b as u32))),
-                    (Value::Float(a), Value::Float(b)) => self.stack.push(Value::Float(a.powf(b))),
-                    _ => self.stack.push(Value::Bool(false)),
-                }
-                OpResult::Continue
-            }
-            OpCode::IntConcat => {
-                let b = self.stack.pop().expect("IntConcat: rhs");
-                let a = self.stack.pop().expect("IntConcat: lhs");
-                let s = format!("{}{}", a, b);
-                self.stack.push(s.parse::<i64>().map(Value::Int).unwrap_or(Value::String(s)));
-                OpResult::Continue
-            }
-
-            OpCode::Equal => {
-                let b = self.stack.pop().expect("Equal: rhs");
-                let a = self.stack.pop().expect("Equal: lhs");
-                self.stack.push(Value::Bool(a == b)); OpResult::Continue
-            }
-            OpCode::NotEqual => {
-                let b = self.stack.pop().expect("NotEqual: rhs");
-                let a = self.stack.pop().expect("NotEqual: lhs");
-                self.stack.push(Value::Bool(a != b)); OpResult::Continue
-            }
-            OpCode::Greater => {
-                let b = self.stack.pop().expect("Greater: rhs");
-                let a = self.stack.pop().expect("Greater: lhs");
-                self.stack.push(Value::Bool(a > b)); OpResult::Continue
-            }
-            OpCode::Less => {
-                let b = self.stack.pop().expect("Less: rhs");
-                let a = self.stack.pop().expect("Less: lhs");
-                self.stack.push(Value::Bool(a < b)); OpResult::Continue
-            }
-            OpCode::GreaterEqual => {
-                let b = self.stack.pop().expect("GreaterEqual: rhs");
-                let a = self.stack.pop().expect("GreaterEqual: lhs");
-                self.stack.push(Value::Bool(a >= b)); OpResult::Continue
-            }
-            OpCode::LessEqual => {
-                let b = self.stack.pop().expect("LessEqual: rhs");
-                let a = self.stack.pop().expect("LessEqual: lhs");
-                self.stack.push(Value::Bool(a <= b)); OpResult::Continue
-            }
-            OpCode::And => {
-                let b = self.stack.pop().expect("And: rhs");
-                let a = self.stack.pop().expect("And: lhs");
-                match (a, b) {
-                    (Value::Bool(a), Value::Bool(b)) => self.stack.push(Value::Bool(a && b)),
-                    _ => self.stack.push(Value::Bool(false)),
-                }
-                OpResult::Continue
-            }
-            OpCode::Or => {
-                let b = self.stack.pop().expect("Or: rhs");
-                let a = self.stack.pop().expect("Or: lhs");
-                match (a, b) {
-                    (Value::Bool(a), Value::Bool(b)) => self.stack.push(Value::Bool(a || b)),
-                    _ => self.stack.push(Value::Bool(false)),
-                }
-                OpResult::Continue
-            }
-            OpCode::Not => {
-                let a = self.stack.pop().expect("Not: operand");
-                match a {
-                    Value::Bool(v) => self.stack.push(Value::Bool(!v)),
-                    _ => self.stack.push(Value::Bool(false)),
-                }
-                OpResult::Continue
-            }
-            OpCode::Has => {
-                let needle = self.stack.pop().expect("Has: needle");
-                let col    = self.stack.pop().expect("Has: collection");
-                let res = match (col, needle) {
-                    (Value::String(av), Value::String(bv)) => av.contains(bv.as_str()),
-                    (Value::Array(arr), needle) => arr.read().contains(&needle),
-                    (Value::Set(s), needle)     => s.read().contains(&needle),
-                    _ => false,
-                };
-                self.stack.push(Value::Bool(res));
-                OpResult::Continue
-            }
-
-            OpCode::SetUnion | OpCode::SetIntersection | OpCode::SetDifference | OpCode::SetSymDifference => {
-                let b = self.stack.pop().unwrap();
-                let a = self.stack.pop().unwrap();
-                if let (Value::Set(a), Value::Set(b)) = (a, b) {
-                    let op_id: u8 = match op {
-                        OpCode::SetUnion        => 0,
-                        OpCode::SetIntersection => 1,
-                        OpCode::SetDifference   => 2,
-                        _                       => 3,
-                    };
-                    self.stack.push(Value::Set(Arc::new(RwLock::new(
-                        set_op(&a.read(), &b.read(), op_id)
-                    ))));
-                } else {
-                    self.stack.push(Value::Bool(false));
-                }
-                OpResult::Continue
-            }
-
-            OpCode::ArrayInit(count) => {
-                let mut elems: Vec<Value> = (0..count)
-                    .map(|_| self.stack.pop().expect("ArrayInit: underflow"))
-                    .collect();
-                elems.reverse();
-                self.stack.push(Value::Array(Arc::new(RwLock::new(elems))));
-                OpResult::Continue
-            }
-            OpCode::SetInit(count) => {
-                let elems: std::collections::BTreeSet<Value> = (0..count)
-                    .map(|_| self.stack.pop().expect("SetInit: underflow"))
-                    .collect();
-                self.stack.push(Value::Set(Arc::new(RwLock::new(elems))));
-                OpResult::Continue
-            }
-            OpCode::MapInit(count) => {
-                let mut map: Vec<(Value, Value)> = Vec::with_capacity(count);
-                for _ in 0..count {
-                    let v = self.stack.pop().expect("MapInit: val underflow");
-                    let k = self.stack.pop().expect("MapInit: key underflow");
-                    map.push((k, v));
-                }
-                map.reverse();
-                self.stack.push(Value::Map(Arc::new(RwLock::new(map))));
-                OpResult::Continue
-            }
-
-            OpCode::SetRange => {
-                let has_step = matches!(
-                    self.stack.pop().expect("SetRange: flag"),
-                    Value::Bool(true)
-                );
-                let step_val = if has_step { self.stack.pop().expect("SetRange: step") } else { Value::Int(1) };
-                let end_val   = self.stack.pop().expect("SetRange: end");
-                let start_val = self.stack.pop().expect("SetRange: start");
- 
-                let mut elements: Vec<Value> = Vec::new();
-                match (start_val, end_val, step_val) {
-                    (Value::Int(start), Value::Int(end), Value::Int(step)) => {
-                        if step > 0 { let mut c = start; while c <= end   { elements.push(Value::Int(c)); c += step; } }
-                        else if step < 0 { let mut c = start; while c >= end { elements.push(Value::Int(c)); c += step; } }
-                    }
-                    (Value::Float(start), Value::Float(end), sv) => {
-                        let step = match sv { Value::Float(f) => f, Value::Int(i) => i as f64, _ => 1.0 };
-                        if step > 0.0 { let mut c = start; while c <= end + 1e-9 { elements.push(Value::Float(c)); c += step; } }
-                        else if step < 0.0 { let mut c = start; while c >= end - 1e-9 { elements.push(Value::Float(c)); c += step; } }
-                    }
-                    (Value::String(start), Value::String(end), Value::Int(step))
-                        if start.chars().count() == 1 && end.chars().count() == 1 =>
-                    {
-                        let sc = start.chars().next().unwrap() as u32;
-                        let ec = end.chars().next().unwrap() as u32;
-                        if step > 0 {
-                            let mut c = sc;
-                            while c <= ec {
-                                if let Some(ch) = std::char::from_u32(c) { elements.push(Value::String(ch.to_string())); }
-                                c = c.wrapping_add(step as u32);
-                                if c > 0x10FFFF { break; }
-                            }
-                        } else if step < 0 {
-                            let abs = step.unsigned_abs() as u32;
-                            let mut c = sc;
-                            while c >= ec {
-                                if let Some(ch) = std::char::from_u32(c) { elements.push(Value::String(ch.to_string())); }
-                                if c < abs { break; }
-                                c -= abs;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-                self.stack.push(Value::Set(Arc::new(RwLock::new(
-                    elements.into_iter().collect()
-                ))));
-                OpResult::Continue
-            }
-
-            OpCode::RandomChoice => {
-                let receiver = self.stack.pop().unwrap();
-                use rand::Rng;
-                let mut rng = rand::rng();
-                match receiver {
-                    Value::Array(a) => {
-                        let arr = a.read();
-                        if arr.is_empty() { self.stack.push(Value::Bool(false)); }
-                        else { self.stack.push(arr[rng.random_range(0..arr.len())].clone()); }
-                    }
-                    Value::Set(s) => {
-                        let set = s.read();
-                        if set.is_empty() { self.stack.push(Value::Bool(false)); }
-                        else {
-                            let val = set.iter().nth(rng.random_range(0..set.len())).unwrap().clone();
-                            self.stack.push(val);
-                        }
-                    }
-                    _ => self.stack.push(Value::Bool(false)),
-                }
-                OpResult::Continue
-            }
-
-            OpCode::Print => {
-                let val = self.stack.pop().expect("Print: empty stack");
-                let s = val.to_string();
-                if s.contains('\x1B') || s.contains('\r') || s.ends_with('\n') {
-                    print!("{}", s);
-                } else {
-                    println!("{}", s);
-                }
-                use std::io::Write;
-                std::io::stdout().flush().unwrap();
-                OpResult::Continue
-            }
-            OpCode::Input => {
-                use std::io::{self, Write};
-                print!("> ");
-                io::stdout().flush().unwrap();
-                let mut input = String::new();
-                io::stdin().read_line(&mut input).unwrap();
-                let t = input.trim();
-                self.stack.push(
-                    if let Ok(i) = t.parse::<i64>()      { Value::Int(i) }
-                    else if let Ok(f) = t.parse::<f64>() { Value::Float(f) }
-                    else if t == "true"                   { Value::Bool(true) }
-                    else if t == "false"                  { Value::Bool(false) }
-                    else                                  { Value::String(t.to_string()) }
-                );
-                OpResult::Continue
-            }
-
-            OpCode::StoreWrite => {
-                let content  = self.stack.pop().unwrap();
-                let path_val = self.stack.pop().unwrap();
-                if let (Value::String(c), Value::String(p)) = (&content, &path_val) {
-                    if !is_safe_path(p) { return OpResult::Halt; }
-                    let path = std::path::Path::new(p);
-                    if let Some(parent) = path.parent() {
-                        if !parent.as_os_str().is_empty() && std::fs::create_dir_all(parent).is_err() { return OpResult::Halt; }
-                    }
-                    if std::fs::write(p, c).is_err() { return OpResult::Halt; }
-                    self.stack.push(Value::Bool(true));
-                } else { return OpResult::Halt; }
-                OpResult::Continue
-            }
-            OpCode::StoreRead => {
-                let path_val = self.stack.pop().unwrap();
-                if let Value::String(p) = &path_val {
-                    if !is_safe_path(p) { return OpResult::Halt; }
-                    match std::fs::read_to_string(p) {
-                        Ok(c) => self.stack.push(Value::String(c)),
-                        Err(_) => return OpResult::Halt,
-                    }
-                } else { return OpResult::Halt; }
-                OpResult::Continue
-            }
-            OpCode::StoreAppend => {
-                let content  = self.stack.pop().unwrap();
-                let path_val = self.stack.pop().unwrap();
-                if let (Value::String(c), Value::String(p)) = (&content, &path_val) {
-                    if !is_safe_path(p) { return OpResult::Halt; }
-                    let path = std::path::Path::new(p);
-                    if let Some(parent) = path.parent() {
-                        if !parent.as_os_str().is_empty() && std::fs::create_dir_all(parent).is_err() { return OpResult::Halt; }
-                    }
-                    use std::io::Write as IoWrite;
-                    match std::fs::OpenOptions::new().append(true).create(true).open(p) {
-                        Ok(mut f) => { if write!(f, "{}", c).is_err() { return OpResult::Halt; } }
-                        Err(_) => return OpResult::Halt,
-                    }
-                    self.stack.push(Value::Bool(true));
-                } else { return OpResult::Halt; }
-                OpResult::Continue
-            }
-            OpCode::StoreExists => {
-                let path_val = self.stack.pop().unwrap();
-                if let Value::String(p) = path_val {
-                    if !is_safe_path(&p) { return OpResult::Halt; }
-                    self.stack.push(Value::Bool(std::path::Path::new(&p).exists()));
-                } else { return OpResult::Halt; }
-                OpResult::Continue
-            }
-            OpCode::StoreDelete => {
-                let path_val = self.stack.pop().unwrap();
-                if let Value::String(p) = path_val {
-                    if !is_safe_path(&p) { return OpResult::Halt; }
-                    let path = std::path::Path::new(&p);
-                    let res = if path.is_dir() {
-                        std::fs::remove_dir_all(path).is_ok()
-                    } else {
-                        std::fs::remove_file(path).is_ok()
-                    };
-                    self.stack.push(Value::Bool(res));
-                } else { return OpResult::Halt; }
-                OpResult::Continue
-            }
-
-            OpCode::JsonParse => {
-                let s_val = self.stack.pop().expect("JsonParse: string");
-                if let Value::String(s) = s_val {
-                    match serde_json::from_str::<serde_json::Value>(&s) {
-                        Ok(v) => self.stack.push(Value::Json(Arc::new(RwLock::new(v)))),
-                        Err(_) => return OpResult::Halt,
-                    }
-                } else { return OpResult::Halt; }
-                OpResult::Continue
-            }
-            OpCode::JsonBind(idx) => {
-                let path_val = self.stack.pop().expect("JsonBind: path");
-                let json_val = self.stack.pop().expect("JsonBind: json");
-                if let (Value::Json(j), Value::String(p)) = (json_val, path_val) {
-                    if let Some(v) = json_path_to_value(&j.read(), &p) {
-                        let mut glbs = self.vm.globals.write();
-                        let target_val = glbs[idx].clone();
-                        glbs[idx] = json_value_to_typed_value_raw(&v, &target_val);
-                    } else { return OpResult::Halt; }
-                }
-                OpResult::Continue
-            }
-            OpCode::JsonBindLocal(idx) => {
-                let path_val = self.stack.pop().expect("JsonBindLocal: path");
-                let json_val = self.stack.pop().expect("JsonBindLocal: json");
-                if let (Value::Json(j), Value::String(p)) = (json_val, path_val) {
-                    if let Some(v) = json_path_to_value(&j.read(), &p) {
-                        if idx >= locals.len() { locals.resize(idx + 1, Value::Bool(false)); }
-                        let target_val = locals[idx].clone();
-                        locals[idx] = json_value_to_typed_value_raw(&v, &target_val);
-                    } else { return OpResult::Halt; }
-                }
-                OpResult::Continue
-            }
-            OpCode::JsonInject(idx) => {
-                let mapping_val = self.stack.pop().expect("JsonInject: mapping");
-                let json_val    = self.stack.pop().expect("JsonInject: json");
-                if let (Value::Json(j), Value::Map(m)) = (json_val, mapping_val) {
-                    let glbs = self.vm.globals.read();
-                    if let Value::Table(t) = glbs[idx].clone() {
-                        inject_json_into_table(&mut t.write(), &j.read(), &m.read());
-                    }
-                }
-                OpResult::Continue
-            }
-            OpCode::JsonInjectLocal(idx) => {
-                let mapping_val = self.stack.pop().expect("JsonInjectLocal: mapping");
-                let json_val    = self.stack.pop().expect("JsonInjectLocal: json");
-                if let (Value::Json(j), Value::Map(m)) = (json_val, mapping_val) {
-                    if let Some(Value::Table(t)) = locals.get(idx).cloned() {
-                        inject_json_into_table(&mut t.write(), &j.read(), &m.read());
-                    }
-                }
-                OpResult::Continue
-            }
-
-            OpCode::DateNow => {
-                self.stack.push(Value::Date(chrono::Utc::now().naive_utc()));
-                OpResult::Continue
-            }
-
-            OpCode::TableInit(idx, row_count) => {
-                let skeleton = self.ctx.constants[idx].clone();
-                if let Value::Table(table_lock) = skeleton {
-                    let col_def = {
-                        let table = table_lock.read();
-                        table.columns.clone()
-                    };
-                    let non_auto_col_count = col_def.iter().filter(|c| !c.is_auto).count();
-                    
-                    let mut rows = Vec::with_capacity(row_count);
-                    for _ in 0..row_count {
-                        let mut row_vals = Vec::with_capacity(col_def.len());
-                        for _ in 0..col_def.len() {
-                            row_vals.push(Value::Bool(false));
-                        }
-                        rows.push(row_vals);
-                    }
-
-                    for r in (0..row_count).rev() {
-                        let mut stack_vals = Vec::with_capacity(non_auto_col_count);
-                        for _ in 0..non_auto_col_count {
-                            stack_vals.push(self.stack.pop().expect("TableInit: missing cell value"));
-                        }
-                        stack_vals.reverse();
-                        
-                        let mut stack_idx = 0;
-                        for (c_idx, col) in col_def.iter().enumerate() {
-                            if col.is_auto {
-                                rows[r][c_idx] = Value::Int((r + 1) as i64);
-                            } else {
-                                rows[r][c_idx] = stack_vals[stack_idx].clone();
-                                stack_idx += 1;
-                            }
-                        }
-                    }
-
-                    let new_table_data = TableData {
-                        columns: col_def,
-                        rows,
-                    };
-                    self.stack.push(Value::Table(Arc::new(RwLock::new(new_table_data))));
-                } else {
-                    return OpResult::Halt;
-                }
-                OpResult::Continue
-            }
-
-            OpCode::FiberCreate(func_id, arg_count) => {
-                let mut args: Vec<Value> = (0..arg_count)
-                    .map(|_| self.stack.pop().expect("FiberCreate: arg"))
-                    .collect();
-                args.reverse();
-                let max = self.ctx.functions[func_id].max_locals.max(args.len());
-                args.resize(max, Value::Bool(false));
-                self.stack.push(Value::Fiber(Arc::new(RwLock::new(
-                    FiberState { func_id, ip: 0, locals: args, stack: Vec::new(), is_done: false, yielded_value: None }
-                ))));
-                OpResult::Continue
-            }
-
-            OpCode::Call(func_id, arg_count) => {
-                let mut args: Vec<Value> = (0..arg_count)
-                    .map(|_| self.stack.pop().expect("Call: arg"))
-                    .collect();
-                args.reverse();
-                if self.call_depth >= MAX_CALL_DEPTH { return OpResult::Halt; }
-                self.call_depth += 1;
-                let initial_errors = self.vm.error_count.load(Ordering::Relaxed);
-                let res = self.run_frame(func_id, &args);
-                self.call_depth -= 1;
-                
-                if self.vm.error_count.load(Ordering::Relaxed) > initial_errors {
-                    return OpResult::Halt;
-                }
-                
-                self.stack.push(res.unwrap_or(Value::Bool(false)));
-                OpResult::Continue
-            }
-            OpCode::MethodCall(kind, arg_count) => {
-                // Special-case Fiber methods to reduce stack depth in deep delegation
-                if arg_count == 0 {
-                    match kind {
-                        MethodKind::Next | MethodKind::Run | MethodKind::IsDone | MethodKind::Close => {
-                            let receiver = self.stack.pop().expect("MethodCall: receiver");
-                            if let Value::Fiber(frc) = receiver {
-                                return self.handle_fiber_method(frc, kind, *_ip);
-                            }
-                            // If not a fiber, fall back to general dispatch
-                            self.stack.push(receiver);
-                        }
-                        _ => {}
-                    }
-                }
-
-                let mut args: Vec<Value> = (0..arg_count)
-                    .map(|_| self.stack.pop().expect("MethodCall: arg"))
-                    .collect();
-                args.reverse();
-                let receiver = self.stack.pop().expect("MethodCall: receiver");
-                self.handle_method_call(receiver, kind, args, *_ip)
-            }
-            OpCode::MethodCallCustom(name_idx, arg_count) => {
-                let mut args: Vec<Value> = (0..arg_count)
-                    .map(|_| self.stack.pop().expect("MethodCallCustom: arg"))
-                    .collect();
-                args.reverse();
-                let receiver = self.stack.pop().expect("MethodCallCustom: receiver");
-                let method_name = self.ctx.constants[name_idx].to_string();
-                self.handle_method_call_custom(receiver, method_name, args, *_ip)
-            }
-
-            OpCode::HaltError => {
-                eprintln!("ERROR: {}{}", self.stack.pop().expect("HaltError"), self.current_span_info(*_ip));
-                OpResult::Halt
-            }
-            OpCode::HaltAlert => {
-                println!("HALT.ALERT: {}{}", self.stack.pop().expect("HaltAlert"), self.current_span_info(*_ip));
-                OpResult::Continue
-            }
-            OpCode::HaltFatal => {
-                println!("HALT.FATAL: {}{}", self.stack.pop().expect("HaltFatal"), self.current_span_info(*_ip));
-                OpResult::Halt
-            }
-
-
-            OpCode::HttpCall(method_idx) => {
-                let body = self.stack.pop();
-                let url_val = self.stack.pop().expect("HttpCall: url missing");
-                let url = url_val.to_string();
-
-                if let Err(e) = is_safe_url(&url) {
-                    eprintln!("{}{}", e, self.current_span_info(*_ip));
-                    // Return error response instead of halting — consistent with HttpRequest behavior
-                    let mut res = serde_json::Map::new();
-                    res.insert("status".to_string(), serde_json::Value::Number(0.into()));
-                    res.insert("ok".to_string(), serde_json::Value::Bool(false));
-                    res.insert("error".to_string(), serde_json::Value::String(e));
-                    self.stack.push(Value::Json(Arc::new(RwLock::new(serde_json::Value::Object(res)))));
-                    return OpResult::Continue;
-                }
-
-                let method = self.ctx.constants[method_idx].to_string().to_uppercase();
-                let req = ureq::request(&method, &url)
-                    .timeout(std::time::Duration::from_secs(10));
-
-                let result = if let Some(b_val) = body {
-                    if !matches!(b_val, Value::Bool(false)) {
-                        let body_str = match &b_val {
-                            Value::Json(j) => j.read().to_string(),
-                            other => other.to_string(),
-                        };
-                        req.set("Content-Type", "application/json").send_string(&body_str)
-                    } else {
-                        req.call()
-                    }
-                } else {
-                    req.call()
-                };
-
-                self.stack.push(Value::Json(Arc::new(RwLock::new(build_response_json(result)))));
-                OpResult::Continue
-            }
-
-            OpCode::HttpRequest => {
-                let config_val = self.stack.pop().unwrap();
-                if let Value::Map(m_rc) = config_val {
-                    let m = m_rc.read();
-                    let mut method = "GET".to_string();
-                    let mut url = String::new();
-                    let mut url_safe = true;
-                    let mut headers: Vec<(String, String)> = Vec::new();
-                    let mut body: Option<String> = None;
-                    let mut timeout = 10000u64;
-
-                    for (k, v) in m.iter() {
-                        match k.to_string().as_str() {
-                            "method" => method = v.to_string().to_uppercase(),
-                            "url" => {
-                                url = v.to_string();
-                                if let Err(e) = is_safe_url(&url) {
-                                    eprintln!("{}", e);
-                                    url_safe = false;
-                                }
-                            }
-                            "headers" => {
-                                if let Value::Map(h_rc) = v {
-                                    for (hk, hv) in h_rc.read().iter() {
-                                        headers.push((hk.to_string(), hv.to_string()));
-                                    }
-                                }
-                            }
-                            "body" => {
-                                let bs = match v {
-                                    Value::Json(j) => j.read().to_string(),
-                                    other => other.to_string(),
-                                };
-                                body = Some(bs);
-                            }
-                            "timeout" => if let Value::Int(i) = v { timeout = *i as u64 },
-                            _ => {}
-                        }
-                    }
-
-                    if !url_safe {
-                        let mut res = serde_json::Map::new();
-                        res.insert("status".to_string(), serde_json::Value::Number(0.into()));
-                        res.insert("ok".to_string(), serde_json::Value::Bool(false));
-                        res.insert("error".to_string(), serde_json::Value::String("SSRF blocked".to_string()));
-                        self.stack.push(Value::Json(Arc::new(RwLock::new(serde_json::Value::Object(res)))));
-                        return OpResult::Continue;
-                    }
-
-                    let mut req = ureq::request(&method, &url)
-                        .timeout(std::time::Duration::from_millis(timeout));
-
-                    for (k, v) in headers {
-                        req = req.set(&k, &v);
-                    }
-
-                    let result = if let Some(b) = body {
-                        req.set("Content-Type", "application/json").send_string(&b)
-                    } else {
-                        req.call()
-                    };
-
-                    self.stack.push(Value::Json(Arc::new(RwLock::new(build_response_json(result)))));
-                } else {
-                    return OpResult::Halt;
-                }
-                OpResult::Continue
-            }
-
-            OpCode::HttpRespond => {
-                let headers = self.stack.pop().unwrap_or(Value::Bool(false));
-                let body    = self.stack.pop().unwrap();
-                let status  = self.stack.pop().unwrap();
-
-                let mut resp_obj = serde_json::Map::new();
-                resp_obj.insert("status".to_string(), value_to_json(&status));
-                resp_obj.insert("body".to_string(),   value_to_json(&body));
-                resp_obj.insert("headers".to_string(), value_to_json(&headers));
-
-                self.stack.push(Value::Json(Arc::new(RwLock::new(serde_json::Value::Object(resp_obj)))));
-                OpResult::Continue
-            }
-            OpCode::HttpServe(name_idx) => {
-                let routes   = self.stack.pop().unwrap();
-                let workers_val = self.stack.pop().unwrap();
-                let host_val = self.stack.pop().unwrap();
-                let port_val = self.stack.pop().unwrap().to_string();
-
-                let workers = if let Value::Int(n) = workers_val { n.max(1) as usize } else { 1 };
-                let name = self.ctx.constants[name_idx].to_string();
-                let host_str = match &host_val {
-                    Value::Bool(false) => "127.0.0.1".to_string(),
-                    other => other.to_string(),
-                };
-                let addr = format!("{}:{}", host_str, port_val);
-
-                let server = if let Some(s) = self.vm.servers.read().get(&name) {
-                    s.clone()
-                } else {
-                    let s = match tiny_http::Server::http(&addr) {
-                        Ok(s) => std::sync::Arc::new(s),
-                        Err(e) => {
-                            eprintln!("Failed to start server '{}' on {}: {}", name, addr, e);
-                            return OpResult::Halt;
-                        }
-                    };
-                    self.vm.servers.write().insert(name.clone(), s.clone());
-                    println!("Server: starting '{}' on http://{} with {} workers", name, addr, workers);
-                    s
-                };
-
-                let mut handles = Vec::new();
-                for i in 0..workers {
-                    let server_clone = server.clone();
-                    let vm_clone = self.vm.clone();
-                    let ctx_clone = self.ctx.clone();
-                    let routes_clone = routes.clone();
-                    let name_clone = name.clone();
-
-                    let handle = std::thread::spawn(move || {
-                        let mut worker_executor = Executor {
-                            vm: vm_clone,
-                            ctx: ctx_clone,
-                            current_spans: None,
-                            stack: Vec::with_capacity(128),
-                            call_depth: 0,
-                            fiber_yielded: false,
-                        };
-
-                        loop {
-                            if SHUTDOWN.load(Ordering::SeqCst) {
-                                if i == 0 { println!("Server '{}' shutting down gracefully...", name_clone); }
-                                break;
-                            }
-
-                            if let Ok(Some(mut request)) = server_clone.recv_timeout(std::time::Duration::from_millis(100)) {
-                                let method = request.method().to_string().to_uppercase();
-                                let raw_url = request.url().to_string();
-                                let path_only = raw_url.split('?').next().unwrap_or(&raw_url).to_string();
-                                
-                                let query_str = if let Some(pos) = raw_url.find('?') {
-                                    raw_url[pos + 1..].to_string()
-                                } else {
-                                    String::new()
-                                };
-                                
-                                let query_obj: serde_json::Value = {
-                                    let mut m = serde_json::Map::new();
-                                    if !query_str.is_empty() {
-                                        for pair in query_str.split('&') {
-                                            let mut kv = pair.splitn(2, '=');
-                                            let k = kv.next().unwrap_or("").to_string();
-                                            let v = kv.next().unwrap_or("").to_string();
-                                            if !k.is_empty() {
-                                                let decoded_k = url_decode(&k);
-                                                let decoded_v = url_decode(&v);
-                                                m.insert(decoded_k, serde_json::Value::String(decoded_v));
-                                            }
-                                        }
-                                    }
-                                    serde_json::Value::Object(m)
-                                };
-
-                                let routes_map_rc = if let Value::Map(m) = &routes_clone { m } else { break; };
-                                let routes_map = routes_map_rc.read();
-
-                                let handler = routes_map
-                                    .iter()
-                                    .find(|(k, _)| {
-                                        let k_str = k.to_string();
-                                        if k_str == "*" { return false; }
-                                        let k_parts: Vec<&str> = k_str.split_whitespace().collect();
-                                        if k_parts.len() == 2 {
-                                            let r_meth = k_parts[0].to_uppercase();
-                                            let r_path = k_parts[1];
-                                            r_meth == method && (r_path == path_only || r_path == "*")
-                                        } else {
-                                            false
-                                        }
-                                    })
-                                    .or_else(|| {
-                                        if method == "HEAD" {
-                                            routes_map.iter().find(|(k, _)| {
-                                                let k_str = k.to_string();
-                                                let k_parts: Vec<&str> = k_str.split_whitespace().collect();
-                                                k_parts.len() == 2 && k_parts[0].to_uppercase() == "GET" && k_parts[1] == path_only
-                                            })
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .or_else(|| routes_map.iter().find(|(k, _)| k.to_string() == "*"))
-                                    .map(|(_, v)| v.clone());
-
-                                drop(routes_map);
-
-                                if let Some(Value::Function(fid)) = handler {
-                                    let mut h_map = serde_json::Map::new();
-                                    for h in request.headers() {
-                                        h_map.insert(h.field.to_string().to_lowercase(), serde_json::Value::String(h.value.to_string()));
-                                    }
-
-                                    let mut body_bytes = Vec::new();
-                                    {
-                                        let reader = request.as_reader();
-                                        let limit = 10 * 1024 * 1024;
-                                        let mut limited_reader = std::io::Read::take(reader, limit as u64 + 1);
-                                        let _ = std::io::Read::read_to_end(&mut limited_reader, &mut body_bytes);
-                                    }
-
-                                    if body_bytes.len() > 10 * 1024 * 1024 {
-                                        let resp = tiny_http::Response::from_string("{\"error\": \"Payload Too Large (10MB Limit)\"}")
-                                            .with_status_code(413)
-                                            .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-                                        let _ = request.respond(resp);
-                                        continue;
-                                    }
-
-                                    let body_str  = String::from_utf8_lossy(&body_bytes).to_string();
-                                    let body_json = serde_json::from_str(&body_str).unwrap_or(serde_json::Value::String(body_str));
-
-                                    let mut req_map = serde_json::Map::new();
-                                    req_map.insert("method".to_string(),  serde_json::Value::String(method.clone()));
-                                    req_map.insert("path".to_string(),    serde_json::Value::String(path_only.clone()));
-                                    req_map.insert("query".to_string(),   query_obj);
-                                    req_map.insert("headers".to_string(), serde_json::Value::Object(h_map));
-                                    req_map.insert("body".to_string(),    body_json);
-                                    req_map.insert("ip".to_string(),      serde_json::Value::String(request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "127.0.0.1".to_string())));
-                                    
-                                    let req_val = Value::Json(Arc::new(RwLock::new(serde_json::Value::Object(req_map))));
-
-                                    let mut resp_val = worker_executor.run_frame(fid, &[req_val]);
-                                    if let Some(Value::Fiber(f_rc)) = resp_val {
-                                        resp_val = worker_executor.resume_fiber(f_rc, true);
-                                    }
-
-                                    if let Some(Value::Json(resp_json_rc)) = resp_val {
-                                        worker_executor.send_tiny_http_response(request, resp_json_rc);
-                                    } else {
-                                        let resp = tiny_http::Response::from_string("{\"error\": \"Internal Server Error\"}")
-                                            .with_status_code(500)
-                                            .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
-                                            .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-                                        let _ = request.respond(resp);
-                                    }
-                                } else {
-                                    let resp = tiny_http::Response::from_string("{\"error\": \"Not Found\"}")
-                                        .with_status_code(404)
-                                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
-                                        .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-                                    let _ = request.respond(resp);
-                                }
-                            }
-                        }
-                    });
-                    handles.push(handle);
-                }
-
-                for h in handles { let _ = h.join(); }
-                OpResult::Halt
-            }
-
-            OpCode::CastInt => {
-                let v = self.stack.pop().expect("CastInt");
-                let res = match v {
-                    Value::Int(i) => Value::Int(i),
-                    Value::Float(f) => Value::Int(f as i64),
-                    Value::String(s) => Value::Int(s.trim().parse::<i64>().unwrap_or(0)),
-                    Value::Bool(b) => Value::Int(if b { 1 } else { 0 }),
-                    _ => Value::Int(0),
-                };
-                self.stack.push(res);
-                OpResult::Continue
-            }
-            OpCode::CastFloat => {
-                let v = self.stack.pop().expect("CastFloat");
-                let res = match v {
-                    Value::Int(i) => Value::Float(i as f64),
-                    Value::Float(f) => Value::Float(f),
-                    Value::String(s) => Value::Float(s.trim().parse::<f64>().unwrap_or(0.0)),
-                    Value::Bool(b) => Value::Float(if b { 1.0 } else { 0.0 }),
-                    _ => Value::Float(0.0),
-                };
-                self.stack.push(res);
-                OpResult::Continue
-            }
-            OpCode::CastString => {
-                let v = self.stack.pop().expect("CastString");
-                self.stack.push(Value::String(v.to_string()));
-                OpResult::Continue
-            }
-            OpCode::CastBool => {
-                let v = self.stack.pop().expect("CastBool");
-                let res = match v {
-                    Value::Int(i) => Value::Bool(i != 0),
-                    Value::Float(f) => Value::Bool(f != 0.0),
-                    Value::String(s) => Value::Bool(!s.is_empty()),
-                    Value::Bool(b) => Value::Bool(b),
-                    _ => Value::Bool(false),
-                };
-                self.stack.push(res);
-                OpResult::Continue
-            }
-        }
-    }
 
     // ── method dispatch ───────────────────────────────────────────────────────
-
-    fn handle_method_call(&mut self, receiver: Value, kind: MethodKind, args: Vec<Value>, ip: usize) -> OpResult {
-        match receiver {
-            Value::Array(arr_rc)  => self.handle_array_method(arr_rc, kind, args, ip),
-            Value::Set(set_rc)    => self.handle_set_method(set_rc, kind, args, ip),
-            Value::Map(map_rc)    => self.handle_map_method(map_rc, kind, args, ip),
-            Value::Table(t_rc)    => self.handle_table_method(t_rc, kind, args, ip),
-            Value::Row(t_rc, idx) => self.handle_row_method(t_rc, idx, kind, ip),
-            Value::Date(d)        => self.handle_date_method(d, kind, args, ip),
-            Value::Json(j_rc)     => self.handle_json_method(j_rc.clone(), kind, args, ip),
-            Value::Fiber(f_rc)    => self.handle_fiber_method(f_rc, kind, ip),
-            Value::String(s)      => self.handle_string_method(s, kind, args, ip),
-            Value::Int(i) => {
-                match kind {
-                    MethodKind::ToStr => {
-                        self.stack.push(Value::String(i.to_string()));
-                        OpResult::Continue
-                    }
-                    _ => {
-                        eprintln!("Method {:?} not found on Int{}", kind, self.current_span_info(ip));
-                        OpResult::Halt
-                    }
+    fn handle_method_call(&mut self, dst: u8, receiver: Value, kind: MethodKind, args: &[Value], ip: usize, locals: &mut [Value]) -> OpResult {
+        if receiver.is_float() {
+            match kind {
+                MethodKind::ToStr => {
+                    let res = Value::from_string(Arc::new(receiver.as_f64().to_string()));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                    OpResult::Continue
+                }
+                _ => {
+                    eprintln!("Method {:?} not found on Float{}", kind, self.current_span_info(ip));
+                    OpResult::Halt
                 }
             }
-            Value::Float(f) => {
-                match kind {
-                    MethodKind::ToStr => {
-                        self.stack.push(Value::String(f.to_string()));
-                        OpResult::Continue
-                    }
-                    _ => {
-                        eprintln!("Method {:?} not found on Float{}", kind, self.current_span_info(ip));
-                        OpResult::Halt
-                    }
+        } else if receiver.is_int() {
+            match kind {
+                MethodKind::ToStr => {
+                    let res = Value::from_string(Arc::new(receiver.as_i64().to_string()));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                    OpResult::Continue
+                }
+                _ => {
+                    eprintln!("Method {:?} not found on Int{}", kind, self.current_span_info(ip));
+                    OpResult::Halt
                 }
             }
-            Value::Bool(b) => {
-                match kind {
-                    MethodKind::ToStr => {
-                        self.stack.push(Value::String(b.to_string()));
-                        OpResult::Continue
-                    }
-                    _ => {
-                        eprintln!("Method {:?} not found on Bool{}", kind, self.current_span_info(ip));
-                        OpResult::Halt
-                    }
+        } else if receiver.is_bool() {
+            match kind {
+                MethodKind::ToStr => {
+                    let res = Value::from_string(Arc::new(receiver.as_bool().to_string()));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                    OpResult::Continue
+                }
+                _ => {
+                    eprintln!("Method {:?} not found on Bool{}", kind, self.current_span_info(ip));
+                    OpResult::Halt
                 }
             }
-            Value::Function(_) => {
-                eprintln!("Method calls not supported for Function type{}", self.current_span_info(ip));
-                OpResult::Halt
+        } else if receiver.is_ptr() || receiver.is_date() || receiver.is_func() {
+            let tag = receiver.0 & 0x000F_0000_0000_0000;
+            match tag {
+                TAG_ARR  => self.handle_array_method(dst, receiver.as_array(), kind, args, ip, locals),
+                TAG_SET  => self.handle_set_method(dst, receiver.as_set(), kind, args, ip, locals),
+                TAG_MAP  => self.handle_map_method(dst, receiver.as_map(), kind, args, ip, locals),
+                TAG_TBL  => self.handle_table_method(dst, receiver.as_table(), kind, args, ip, locals),
+                TAG_ROW  => {
+                    let rr = receiver.as_row();
+                    self.handle_row_method(dst, rr, kind, ip, locals)
+                }
+                TAG_DATE => {
+                    let d = chrono::DateTime::from_timestamp_millis(receiver.as_date()).unwrap().with_timezone(&chrono::Local).naive_local();
+                    self.handle_date_method(dst, d, kind, args, ip, locals)
+                }
+                TAG_JSON => self.handle_json_method(dst, receiver.as_json(), kind, args, ip, locals),
+                TAG_FIB  => self.handle_fiber_method(dst, receiver.as_fiber(), kind, ip, locals),
+                TAG_STR  => self.handle_string_method(dst, &receiver.as_string(), kind, args, ip, locals),
+                TAG_FUNC => {
+                    eprintln!("Method {:?} not supported for Function type yet{}", kind, self.current_span_info(ip));
+                    OpResult::Halt
+                }
+                _ => {
+                    eprintln!("Method {:?} not supported for this pointer type {:x}{}", kind, tag, self.current_span_info(ip));
+                    OpResult::Halt
+                }
             }
+        } else {
+            eprintln!("Method call on unknown Value type{}", self.current_span_info(ip));
+            OpResult::Halt
         }
     }
 
-    fn handle_method_call_custom(&mut self, receiver: Value, method_name: String, args: Vec<Value>, ip: usize) -> OpResult {
-        match receiver {
-            Value::Row(t_rc, idx) => self.handle_row_custom(t_rc, idx, &method_name, ip),
-            Value::Json(j_rc) => self.handle_json_custom(j_rc, &method_name, args, ip),
-            _ => {
-                eprintln!("Method {} not found on {:?}{}", method_name, receiver, self.current_span_info(ip));
-                OpResult::Halt
+    fn handle_method_call_custom(&mut self, dst: u8, receiver: Value, method_name: &str, args: &[Value], ip: usize, locals: &mut [Value]) -> OpResult {
+        if receiver.is_ptr() {
+            let tag = receiver.0 & 0x000F_0000_0000_0000;
+            match tag {
+                TAG_ROW  => {
+                    let rr = receiver.as_row();
+                    self.handle_row_custom(dst, rr, method_name, ip, locals)
+                }
+                TAG_JSON => self.handle_json_custom(dst, receiver.as_json(), method_name, args, ip, locals),
+                _ => {
+                    eprintln!("Method {} not found on pointer type {:x}{}", method_name, tag, self.current_span_info(ip));
+                    OpResult::Halt
+                }
             }
+        } else {
+            eprintln!("Method {} not found on non-pointer type{}", method_name, self.current_span_info(ip));
+            OpResult::Halt
         }
     }
 
     // ── fiber resume ──────────────────────────────────────────────────────────
-
     fn resume_fiber(
         &mut self,
         fiber_rc: Arc<RwLock<FiberState>>,
         is_next: bool,
     ) -> Option<Value> {
-        let (func_id, mut ip, mut locals, fstack) = {
+        let (func_id, mut ip, mut locals) = {
             let mut f = fiber_rc.write();
             if f.is_done { return if is_next { f.yielded_value.clone() } else { None }; }
-            (f.func_id, f.ip, std::mem::take(&mut f.locals), std::mem::take(&mut f.stack))
+            (f.func_id, f.ip, std::mem::take(&mut f.locals))
         };
-
         let chunk = self.ctx.functions[func_id].clone();
         let old_spans = self.current_spans.replace(chunk.spans.clone());
-
-        let stack_base = self.stack.len();
-        self.stack.extend(fstack);
         self.fiber_yielded = false;
-        
-        let res = self.execute_bytecode(&chunk.bytecode, &mut ip, &mut locals);
-        
-        let fstack_after = self.stack.split_off(stack_base);
-
+        let ores = self.execute_bytecode(&chunk.bytecode, &mut ip, &mut locals);
+        let res = match ores {
+            OpResult::Return(v) => v,
+            OpResult::Yield(v) => v,
+            _ => None,
+        };
         {
             let mut f = fiber_rc.write();
             f.ip     = ip;
             f.locals = locals;
-            f.stack  = fstack_after;
             if !self.fiber_yielded { f.is_done = true; }
         }
         self.current_spans = old_spans;
         res
     }
 
-    // ── core execution loop ───────────────────────────────────────────────────
+    fn execute_trace(&self, trace: &Trace, ip: &mut usize, locals: &mut Vec<Value>, glbs: &mut RwLockWriteGuard<Vec<Value>>) -> Option<OpResult> {
+        let native_ptr = trace.native_ptr.load(Ordering::Relaxed);
+        if !native_ptr.is_null() {
+            let jit_func: crate::backend::jit::JITFunction = unsafe { std::mem::transmute(native_ptr) };
+            let result = unsafe { jit_func(locals.as_mut_ptr(), glbs.as_mut_ptr(), self.ctx.constants.as_ptr()) };
+            if result == 0 {
+                return None;
+            } else if result > 0 {
+                *ip = result as usize;
+                return None;
+            } else {
+                return Some(OpResult::Halt);
+            }
+        }
 
+        let mut shutdown_counter: u32 = 0;
+        unsafe {
+            'trace_loop: loop {
+                shutdown_counter += 1;
+                if shutdown_counter >= 2048 {
+                    shutdown_counter = 0;
+                    if SHUTDOWN.load(Ordering::Relaxed) { return Some(OpResult::Halt); }
+                }
+
+                for op in &trace.ops {
+                    match op {
+                        TraceOp::LoadConst { dst, val } => {
+                            if val.is_ptr() { val.inc_ref(); }
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = *val;
+                        }
+                        TraceOp::Move { dst, src } => {
+                            let val = *locals.get_unchecked(*src as usize);
+                            if val.is_ptr() { val.inc_ref(); }
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = val;
+                        }
+                        TraceOp::AddInt { dst, src1, src2 } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_i64();
+                            let b = locals.get_unchecked(*src2 as usize).as_i64();
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = Value::from_i64(a.wrapping_add(b));
+                        }
+
+                        TraceOp::SubInt { dst, src1, src2 } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_i64();
+                            let b_val = locals.get_unchecked(*src2 as usize).as_i64();
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = Value::from_i64(a.wrapping_sub(b_val));
+                        }
+
+                        TraceOp::MulInt { dst, src1, src2 } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_i64();
+                            let b_val = locals.get_unchecked(*src2 as usize).as_i64();
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = Value::from_i64(a.wrapping_mul(b_val));
+                        }
+
+                        TraceOp::DivInt { dst, src1, src2, fail_ip } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_i64();
+                            let b_val = locals.get_unchecked(*src2 as usize).as_i64();
+                            if b_val == 0 || (a == i64::MIN && b_val == -1) {
+                                *ip = *fail_ip;
+                                return None;
+                            }
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = Value::from_i64(a / b_val);
+                        }
+
+                        TraceOp::ModInt { dst, src1, src2, fail_ip } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_i64();
+                            let b_val = locals.get_unchecked(*src2 as usize).as_i64();
+                            if b_val == 0 || (a == i64::MIN && b_val == -1) {
+                                *ip = *fail_ip;
+                                return None;
+                            }
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = Value::from_i64(a % b_val);
+                        }
+
+                        TraceOp::AddFloat { dst, src1, src2 } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_f64();
+                            let b_val = locals.get_unchecked(*src2 as usize).as_f64();
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = Value::from_f64(a + b_val);
+                        }
+                        TraceOp::SubFloat { dst, src1, src2 } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_f64();
+                            let b_val = locals.get_unchecked(*src2 as usize).as_f64();
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = Value::from_f64(a - b_val);
+                        }
+                        TraceOp::MulFloat { dst, src1, src2 } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_f64();
+                            let b_val = locals.get_unchecked(*src2 as usize).as_f64();
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = Value::from_f64(a * b_val);
+                        }
+                        TraceOp::DivFloat { dst, src1, src2, fail_ip } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_f64();
+                            let b_val = locals.get_unchecked(*src2 as usize).as_f64();
+                            if b_val == 0.0 {
+                                *ip = *fail_ip;
+                                return None;
+                            }
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = Value::from_f64(a / b_val);
+                        }
+                        TraceOp::ModFloat { dst, src1, src2, fail_ip } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_f64();
+                            let b_val = locals.get_unchecked(*src2 as usize).as_f64();
+                            if b_val == 0.0 {
+                                *ip = *fail_ip;
+                                return None;
+                            }
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = Value::from_f64(a % b_val);
+                        }
+
+                        TraceOp::CmpInt { dst, src1, src2, cc } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_i64();
+                            let b_val = locals.get_unchecked(*src2 as usize).as_i64();
+                            let result = match cc {
+                                0 => a == b_val,
+                                1 => a != b_val,
+                                2 => a >  b_val,
+                                3 => a <  b_val,
+                                4 => a >= b_val,
+                                5 => a <= b_val,
+                                _ => false,
+                            };
+                            *locals.get_unchecked_mut(*dst as usize) = Value::from_bool(result);
+                        }
+
+                        TraceOp::CmpFloat { dst, src1, src2, cc } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_f64();
+                            let b_val = locals.get_unchecked(*src2 as usize).as_f64();
+                            let result = match cc {
+                                0 => a == b_val,
+                                1 => a != b_val,
+                                2 => a >  b_val,
+                                3 => a <  b_val,
+                                4 => a >= b_val,
+                                5 => a <= b_val,
+                                _ => false,
+                            };
+                            *locals.get_unchecked_mut(*dst as usize) = Value::from_bool(result);
+                        }
+                        TraceOp::CastIntToFloat { dst, src } => {
+                            let a = locals.get_unchecked(*src as usize).as_i64();
+                            let d = *dst as usize;
+                            let old = locals.get_unchecked_mut(d);
+                            if old.is_ptr() { old.dec_ref(); }
+                            *old = Value::from_f64(a as f64);
+                        }
+
+                        TraceOp::GuardTrue { reg, fail_ip } => {
+                            let cond_val = *locals.get_unchecked(*reg as usize);
+                            let is_true = cond_val.is_bool() && cond_val.as_bool();
+                            if !is_true {
+                                *ip = *fail_ip;
+                                return None;
+                            }
+                        }
+
+                        TraceOp::GuardFalse { reg, fail_ip } => {
+                            let cond_val = *locals.get_unchecked(*reg as usize);
+                            let is_false = cond_val.is_bool() && !cond_val.as_bool();
+                            if !is_false {
+                                *ip = *fail_ip;
+                                return None;
+                            }
+                        }
+
+                        TraceOp::IncLocal { reg } => {
+                            let r = *reg as usize;
+                            let val = locals.get_unchecked_mut(r);
+                            let v = val.as_i64().wrapping_add(1);
+                            *val = Value::from_i64(v);
+                        }
+                        TraceOp::GetVar { dst, idx } => {
+                            let i = *idx as usize;
+                            if i < glbs.len() {
+                                let val = *glbs.get_unchecked(i);
+                                if val.is_ptr() { val.inc_ref(); }
+                                let d = *dst as usize;
+                                let old = locals.get_unchecked_mut(d);
+                                if old.is_ptr() { old.dec_ref(); }
+                                *old = val;
+                            }
+                        }
+                        TraceOp::SetVar { idx, src } => {
+                            let val = *locals.get_unchecked(*src as usize);
+                            if val.is_ptr() { val.inc_ref(); }
+                            let i = *idx as usize;
+                            if i >= glbs.len() { glbs.resize(i + 1, Value::from_bool(false)); }
+                            let target_val = glbs.get_unchecked_mut(i);
+                            if target_val.is_ptr() { target_val.dec_ref(); }
+                            *target_val = val;
+                        }
+                        TraceOp::GuardInt { reg, ip: side_exit_ip } => {
+                            if !locals.get_unchecked(*reg as usize).is_int() {
+                                *ip = *side_exit_ip;
+                                return None;
+                            }
+                        }
+                        TraceOp::GuardFloat { reg, ip: side_exit_ip } => {
+                            if !locals.get_unchecked(*reg as usize).is_float() {
+                                *ip = *side_exit_ip;
+                                return None;
+                            }
+                        }
+                        TraceOp::LoopNextInt { reg, limit_reg, target, exit_ip } => {
+                            let r = *reg as usize;
+                            let limit = locals.get_unchecked(*limit_reg as usize).as_i64();
+                            let l_val = locals.get_unchecked_mut(r);
+
+                            if (l_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_INT) {
+                                let v = (l_val.0 & 0x0000_FFFF_FFFF_FFFF).wrapping_add(1) & 0x0000_FFFF_FFFF_FFFF;
+                                l_val.0 = (l_val.0 & 0xFFFF_0000_0000_0000) | v;
+                                let lv = l_val.as_i64();
+                                if lv <= limit {
+                                    *ip = *target as usize;
+                                    if *ip == trace.start_ip { continue 'trace_loop; }
+                                    return None;
+                                } else {
+                                    *ip = *exit_ip;
+                                    return None;
+                                }
+                            } else {
+                                let lv = l_val.as_i64().wrapping_add(1);
+                                *l_val = Value::from_i64(lv);
+                                if lv <= limit {
+                                    *ip = *target as usize;
+                                    if *ip == trace.start_ip { continue 'trace_loop; }
+                                    return None;
+                                } else {
+                                    *ip = *exit_ip;
+                                    return None;
+                                }
+                            }
+                        }
+                        TraceOp::IncVar { g_idx } => {
+                            let i = *g_idx as usize;
+                            let g_val = glbs.get_unchecked_mut(i);
+                            if (g_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_INT) {
+                                let v = (g_val.0 & 0x0000_FFFF_FFFF_FFFF).wrapping_add(1) & 0x0000_FFFF_FFFF_FFFF;
+                                g_val.0 = (g_val.0 & 0xFFFF_0000_0000_0000) | v;
+                            } else {
+                                *g_val = Value::from_i64(g_val.as_i64().wrapping_add(1));
+                            }
+                        }
+                        TraceOp::IncVarLoopNext { g_idx, reg, limit_reg, target, exit_ip } => {
+                            let i = *g_idx as usize;
+                            let g_val = glbs.get_unchecked_mut(i);
+                            
+                            if (g_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_INT) {
+                                let v = (g_val.0 & 0x0000_FFFF_FFFF_FFFF).wrapping_add(1) & 0x0000_FFFF_FFFF_FFFF;
+                                g_val.0 = (g_val.0 & 0xFFFF_0000_0000_0000) | v;
+                            } else {
+                                if g_val.is_ptr() { g_val.dec_ref(); }
+                                *g_val = Value::from_i64(g_val.as_i64().wrapping_add(1));
+                            }
+
+                            let r = *reg as usize;
+                            let limit_i64 = locals.get_unchecked(*limit_reg as usize).as_i64();
+                            let l_val = locals.get_unchecked_mut(r);
+                            
+                            if (l_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_INT) {
+                                let v = (l_val.0 & 0x0000_FFFF_FFFF_FFFF).wrapping_add(1) & 0x0000_FFFF_FFFF_FFFF;
+                                l_val.0 = (l_val.0 & 0xFFFF_0000_0000_0000) | v;
+                                let lv = l_val.as_i64();
+                                if lv <= limit_i64 {
+                                    *ip = *target as usize;
+                                    if *ip == trace.start_ip { continue 'trace_loop; }
+                                    return None;
+                                } else {
+                                    *ip = *exit_ip;
+                                    return None;
+                                }
+                            } else {
+                                let lv = l_val.as_i64().wrapping_add(1);
+                                *l_val = Value::from_i64(lv);
+                                if lv <= limit_i64 {
+                                    *ip = *target as usize;
+                                    if *ip == trace.start_ip { continue 'trace_loop; }
+                                    return None;
+                                } else {
+                                    *ip = *exit_ip;
+                                    return None;
+                                }
+                            }
+                        }
+                        TraceOp::IncLocalLoopNext { inc_reg, reg, limit_reg, target, exit_ip } => {
+                            let r = *reg as usize;
+                            let ir = *inc_reg as usize;
+
+                            let ir_val = locals.get_unchecked_mut(ir);
+                            if (ir_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_INT) {
+                                let v = (ir_val.0 & 0x0000_FFFF_FFFF_FFFF).wrapping_add(1) & 0x0000_FFFF_FFFF_FFFF;
+                                ir_val.0 = (ir_val.0 & 0xFFFF_0000_0000_0000) | v;
+                            } else {
+                                *ir_val = Value::from_i64(ir_val.as_i64().wrapping_add(1));
+                            }
+
+                            let limit_i64 = locals.get_unchecked(*limit_reg as usize).as_i64();
+                            let r_val = locals.get_unchecked_mut(r);
+                            
+                            let lv = r_val.as_i64().wrapping_add(1);
+                            *r_val = Value::from_i64(lv);
+
+                            if lv <= limit_i64 {
+                                *ip = *target as usize;
+                                if *ip == trace.start_ip { continue 'trace_loop; }
+                                return None;
+                            } else {
+                                *ip = *exit_ip;
+                                return None;
+                            }
+                        }
+                        TraceOp::Jump { target_ip } => {
+                            *ip = *target_ip;
+                            if *ip == trace.start_ip { continue 'trace_loop; }
+                            return None;
+                        }
+                        TraceOp::And { dst, src1, src2 } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_bool();
+                            let b = locals.get_unchecked(*src2 as usize).as_bool();
+                            let d = *dst as usize;
+                            *locals.get_unchecked_mut(d) = Value::from_bool(a && b);
+                        }
+                        TraceOp::Or { dst, src1, src2 } => {
+                            let a = locals.get_unchecked(*src1 as usize).as_bool();
+                            let b = locals.get_unchecked(*src2 as usize).as_bool();
+                            let d = *dst as usize;
+                            *locals.get_unchecked_mut(d) = Value::from_bool(a || b);
+                        }
+                        TraceOp::Not { dst, src } => {
+                            let val = locals.get_unchecked(*src as usize).as_bool();
+                            let d = *dst as usize;
+                            *locals.get_unchecked_mut(d) = Value::from_bool(!val);
+                        }
+                    }
+                }
+                return None;
+            }
+        }
+    }
     fn run_frame_owned(&mut self, chunk: FunctionChunk) -> Option<Value> {
         self.current_spans = Some(chunk.spans.clone());
         let mut ip = 0;
-        let mut locals = vec![Value::Bool(false); chunk.max_locals];
-        let res = self.execute_bytecode(&chunk.bytecode, &mut ip, &mut locals);
+        let mut locals = vec![Value::from_bool(false); chunk.max_locals];
+        let old_hot = std::mem::replace(&mut self.hot_counts, vec![0; chunk.bytecode.len()]);
+        let old_trace_cache = std::mem::replace(&mut self.trace_cache, vec![None; chunk.bytecode.len()]);
+        self.recording_trace = None;
+        self.is_recording = false;
+        {
+            let traces = self.vm.traces.read();
+            for (ip, trace) in traces.iter() {
+                if *ip < self.trace_cache.len() {
+                    self.trace_cache[*ip] = Some(trace.clone());
+                }
+            }
+        }
+        let res = match self.execute_bytecode(&chunk.bytecode, &mut ip, &mut locals) {
+            OpResult::Return(v) => v,
+            _ => None,
+        };
+        self.hot_counts = old_hot;
+        self.trace_cache = old_trace_cache;
+        for v in locals { unsafe { v.dec_ref(); } }
         res
     }
 
@@ -1812,194 +1310,1862 @@ impl Executor {
         let old_spans = self.current_spans.replace(chunk.spans.clone());
         let mut ip = 0;
         let mut locals = params.to_vec();
-        locals.resize(chunk.max_locals.max(params.len()), Value::Bool(false));
-        let res = self.execute_bytecode(&chunk.bytecode, &mut ip, &mut locals);
-        self.current_spans = old_spans;
-        res
-    }
-
-    fn execute_bytecode(&mut self, bytecode: &[OpCode], ip: &mut usize, locals: &mut Vec<Value>) -> Option<Value> {
-        while *ip < bytecode.len() {
-            let op = bytecode[*ip];
-            *ip += 1;
-            match self.execute_step(op, ip, locals) {
-                OpResult::Continue => {}
-                OpResult::Jump(t) => *ip = t,
-                OpResult::Return(val) => {
-                    *ip = bytecode.len();
-                    self.fiber_yielded = false;
-                    return val;
-                }
-                OpResult::Yield(val) => {
-                    self.fiber_yielded = true;
-                    return val;
-                }
-                OpResult::Halt => {
-                    *ip = bytecode.len();
-                    self.fiber_yielded = false;
-                    self.vm.error_count.fetch_add(1, Ordering::Relaxed);
-                    return None;
+        for v in &locals { unsafe { v.inc_ref(); } }
+        locals.resize(chunk.max_locals.max(params.len()), Value::from_bool(false));
+        let old_hot = std::mem::replace(&mut self.hot_counts, vec![0; chunk.bytecode.len()]);
+        let old_trace_cache = std::mem::replace(&mut self.trace_cache, vec![None; chunk.bytecode.len()]);
+        self.recording_trace = None;
+        self.is_recording = false;
+        {
+            let traces = self.vm.traces.read();
+            for (ip, trace) in traces.iter() {
+                if *ip < self.trace_cache.len() {
+                    self.trace_cache[*ip] = Some(trace.clone());
                 }
             }
         }
-        *ip = bytecode.len();
-        self.fiber_yielded = false;
-        None
+        
+        let res = match self.execute_bytecode(&chunk.bytecode, &mut ip, &mut locals) {
+            OpResult::Return(v) => v,
+            _ => None,
+        };
+        self.hot_counts = old_hot;
+        self.trace_cache = old_trace_cache;
+        self.current_spans = old_spans;
+        for v in locals { unsafe { v.dec_ref(); } }
+        res
     }
 
-    // ── collection methods ────────────────────────────────────────────────────
 
-    fn handle_array_method(&mut self, arr_rc: Arc<RwLock<Vec<Value>>>, kind: MethodKind, args: Vec<Value>, ip: usize) -> OpResult {
+    fn execute_bytecode(&mut self, bytecode: &[OpCode], ip: &mut usize, locals: &mut Vec<Value>) -> OpResult {
+        let vm_arc = self.vm.clone();
+        let mut glbs = vm_arc.globals.write();
+
+        while *ip < bytecode.len() {
+            if SHUTDOWN.load(Ordering::Relaxed) { return OpResult::Halt; }
+            let current_ip = *ip;
+
+            if !self.is_recording && current_ip < self.trace_cache.len() {
+                if let Some(trace) = &self.trace_cache[current_ip] {
+                    let jit_res = self.execute_trace(trace, ip, locals, &mut glbs);
+                    if let Some(res) = jit_res {
+                        return res;
+                    }
+                    continue;
+                }
+            }
+
+            if let Some(trace) = self.recording_trace.take() {
+                self.is_recording = false;
+                if current_ip == trace.start_ip && !trace.ops.is_empty() && current_ip < self.trace_cache.len() {
+                    let mut jit = self.vm.jit.lock();
+                    match jit.compile(&trace) {
+                        Ok(ptr) => {
+                            trace.native_ptr.store(ptr as *mut u8, Ordering::Relaxed);
+                        }
+                        Err(e) => {
+                        }
+                    }
+                    drop(jit);
+                    let arc_trace = Arc::new(trace);
+                    self.vm.traces.write().insert(current_ip, arc_trace.clone());
+                    self.trace_cache[current_ip] = Some(arc_trace);
+                } else {
+                    self.recording_trace = Some(trace);
+                    self.is_recording = true;
+                }
+            }
+
+            let op = bytecode[current_ip];
+            *ip += 1;
+
+            if self.is_recording {
+                if let Some(ref mut trace) = self.recording_trace {
+                match op {
+                    OpCode::LoadConst { dst, idx } => {
+                        trace.ops.push(TraceOp::LoadConst {
+                            dst,
+                            val: self.ctx.constants[idx as usize],
+                        });
+                    }
+                    OpCode::Move { dst, src } => {
+                        trace.ops.push(TraceOp::Move { dst, src });
+                    }
+                    OpCode::Add { dst, src1, src2 } => {
+                        let a = locals[src1 as usize];
+                        let b = locals[src2 as usize];
+                        if a.is_int() && b.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::AddInt { dst, src1, src2 });
+                        } else if a.is_float() && b.is_float() {
+                            trace.ops.push(TraceOp::GuardFloat { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardFloat { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::AddFloat { dst, src1, src2 });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    OpCode::Sub { dst, src1, src2 } => {
+                        let a = locals[src1 as usize];
+                        let b = locals[src2 as usize];
+                        if a.is_int() && b.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::SubInt { dst, src1, src2 });
+                        } else if a.is_float() && b.is_float() {
+                            trace.ops.push(TraceOp::GuardFloat { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardFloat { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::SubFloat { dst, src1, src2 });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    OpCode::Mul { dst, src1, src2 } => {
+                        let a = locals[src1 as usize];
+                        let b = locals[src2 as usize];
+                        if a.is_int() && b.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::MulInt { dst, src1, src2 });
+                        } else if a.is_float() && b.is_float() {
+                            trace.ops.push(TraceOp::GuardFloat { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardFloat { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::MulFloat { dst, src1, src2 });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+
+                    OpCode::Div { dst, src1, src2 } => {
+                        let a = locals[src1 as usize];
+                        let b = locals[src2 as usize];
+                        if a.is_int() && b.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::DivInt { dst, src1, src2, fail_ip: current_ip });
+                        } else if a.is_float() && b.is_float() {
+                            trace.ops.push(TraceOp::GuardFloat { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardFloat { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::DivFloat { dst, src1, src2, fail_ip: current_ip });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    OpCode::Mod { dst, src1, src2 } => {
+                        let a = locals[src1 as usize];
+                        let b = locals[src2 as usize];
+                        if a.is_int() && b.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::ModInt { dst, src1, src2, fail_ip: current_ip });
+                        } else if a.is_float() && b.is_float() {
+                            trace.ops.push(TraceOp::GuardFloat { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardFloat { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::ModFloat { dst, src1, src2, fail_ip: current_ip });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    OpCode::Greater { dst, src1, src2 } => {
+                        let a = locals[src1 as usize];
+                        let b = locals[src2 as usize];
+                        if a.is_int() && b.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpInt { dst, src1, src2, cc: 2 });
+                        } else if a.is_float() && b.is_float() {
+                            trace.ops.push(TraceOp::GuardFloat { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardFloat { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpFloat { dst, src1, src2, cc: 2 });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    OpCode::Less { dst, src1, src2 } => {
+                        let a = locals[src1 as usize];
+                        let b = locals[src2 as usize];
+                        if a.is_int() && b.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpInt { dst, src1, src2, cc: 3 });
+                        } else if a.is_float() && b.is_float() {
+                            trace.ops.push(TraceOp::GuardFloat { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardFloat { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpFloat { dst, src1, src2, cc: 3 });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    OpCode::GreaterEqual { dst, src1, src2 } => {
+                        let a = locals[src1 as usize];
+                        let b = locals[src2 as usize];
+                        if a.is_int() && b.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpInt { dst, src1, src2, cc: 4 });
+                        } else if a.is_float() && b.is_float() {
+                            trace.ops.push(TraceOp::GuardFloat { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardFloat { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpFloat { dst, src1, src2, cc: 4 });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    OpCode::LessEqual { dst, src1, src2 } => {
+                        let a = locals[src1 as usize];
+                        let b = locals[src2 as usize];
+                        if a.is_int() && b.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpInt { dst, src1, src2, cc: 5 });
+                        } else if a.is_float() && b.is_float() {
+                            trace.ops.push(TraceOp::GuardFloat { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardFloat { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpFloat { dst, src1, src2, cc: 5 });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    OpCode::Equal { dst, src1, src2 } => {
+                        let a = locals[src1 as usize];
+                        let b = locals[src2 as usize];
+                        if a.is_int() && b.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpInt { dst, src1, src2, cc: 0 });
+                        } else if a.is_float() && b.is_float() {
+                            trace.ops.push(TraceOp::GuardFloat { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardFloat { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpFloat { dst, src1, src2, cc: 0 });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    OpCode::NotEqual { dst, src1, src2 } => {
+                        let a = locals[src1 as usize];
+                        let b = locals[src2 as usize];
+                        if a.is_int() && b.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpInt { dst, src1, src2, cc: 1 });
+                        } else if a.is_float() && b.is_float() {
+                            trace.ops.push(TraceOp::GuardFloat { reg: src1, ip: current_ip });
+                            trace.ops.push(TraceOp::GuardFloat { reg: src2, ip: current_ip });
+                            trace.ops.push(TraceOp::CmpFloat { dst, src1, src2, cc: 1 });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    OpCode::JumpIfFalse { src, target } => {
+                        let val = locals[src as usize];
+                        let taken = val.is_bool() && !val.as_bool();
+                        if taken {
+                            trace.ops.push(TraceOp::GuardFalse { reg: src, fail_ip: current_ip + 1 });
+                        } else {
+                            trace.ops.push(TraceOp::GuardTrue { reg: src, fail_ip: target as usize });
+                        }
+                    }
+                    OpCode::JumpIfTrue { src, target } => {
+                        let val = locals[src as usize];
+                        let taken = val.is_bool() && val.as_bool();
+                        if taken {
+                            trace.ops.push(TraceOp::GuardTrue { reg: src, fail_ip: current_ip + 1 });
+                        } else {
+                            trace.ops.push(TraceOp::GuardFalse { reg: src, fail_ip: target as usize });
+                        }
+                    }
+                    OpCode::GetVar { dst, idx } => {
+                        trace.ops.push(TraceOp::GetVar { dst, idx });
+                    }
+                    OpCode::SetVar { idx, src } => {
+                        trace.ops.push(TraceOp::SetVar { idx, src });
+                    }
+                    OpCode::LoopNext { reg, limit_reg, target } => {
+                        if locals[reg as usize].is_int() && locals[limit_reg as usize].is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg,       ip: current_ip });
+                            trace.ops.push(TraceOp::GuardInt { reg: limit_reg, ip: current_ip });
+                            trace.ops.push(TraceOp::LoopNextInt {
+                                reg, limit_reg, target, exit_ip: current_ip + 1,
+                            });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    OpCode::IncVar { idx } => {
+                        trace.ops.push(TraceOp::IncVar { g_idx: idx });
+                    }
+                    OpCode::IncVarLoopNext { g_idx, reg, limit_reg, target } => {
+                        trace.ops.push(TraceOp::IncVarLoopNext {
+                            g_idx, reg, limit_reg, target,
+                            exit_ip: current_ip + 1,
+                        });
+                    }
+                    OpCode::IncLocal { reg } => {
+                        trace.ops.push(TraceOp::IncLocal { reg });
+                    }
+                    OpCode::IncLocalLoopNext { inc_reg, reg, limit_reg, target } => {
+                        trace.ops.push(TraceOp::IncLocalLoopNext {
+                            inc_reg, reg, limit_reg, target,
+                            exit_ip: current_ip + 1,
+                        });
+                    }
+                    OpCode::Jump { target } => {
+                        trace.ops.push(TraceOp::Jump { target_ip: target as usize });
+                    }
+                    OpCode::And { dst, src1, src2 } => {
+                        trace.ops.push(TraceOp::And { dst, src1, src2 });
+                    }
+                    OpCode::Or { dst, src1, src2 } => {
+                        trace.ops.push(TraceOp::Or { dst, src1, src2 });
+                    }
+                    OpCode::Not { dst, src } => {
+                        trace.ops.push(TraceOp::Not { dst, src });
+                    }
+                    OpCode::CastFloat { dst, src } => {
+                        let a = locals[src as usize];
+                        if a.is_int() {
+                            trace.ops.push(TraceOp::GuardInt { reg: src, ip: current_ip });
+                            trace.ops.push(TraceOp::CastIntToFloat { dst, src });
+                        } else {
+                            self.recording_trace = None;
+                            self.is_recording = false;
+                        }
+                    }
+                    _ => {
+                        self.recording_trace = None;
+                        self.is_recording = false;
+                    }
+                }
+            }
+            }
+
+            match op {
+                OpCode::LoadConst { dst, idx } => {
+                    let val = self.ctx.constants[idx as usize];
+                    if val.is_ptr() { unsafe { val.inc_ref(); } }
+                    let d = &mut locals[dst as usize];
+                    if d.is_ptr() { unsafe { d.dec_ref(); } }
+                    *d = val;
+                }
+                OpCode::Move { dst, src } => {
+                    let val = locals[src as usize];
+                    if val.is_ptr() { unsafe { val.inc_ref(); } }
+                    let d = &mut locals[dst as usize];
+                    if d.is_ptr() { unsafe { d.dec_ref(); } }
+                    *d = val;
+                }
+                OpCode::GetVar { dst, idx } => {
+                    let val = glbs.get(idx as usize).cloned().unwrap_or(Value::from_bool(false));
+                    if val.is_ptr() { unsafe { val.inc_ref(); } }
+                    let d = &mut locals[dst as usize];
+                    if d.is_ptr() { unsafe { d.dec_ref(); } }
+                    *d = val;
+                }
+                OpCode::SetVar { idx, src } => {
+                    let val = locals[src as usize];
+                    if val.is_ptr() { unsafe { val.inc_ref(); } }
+                    let idx = idx as usize;
+                    if idx >= glbs.len() { glbs.resize(idx + 1, Value::from_bool(false)); }
+                    let g = &mut glbs[idx];
+                    if g.is_ptr() { unsafe { g.dec_ref(); } }
+                    *g = val;
+                }
+                OpCode::Add { dst, src1, src2 } => {
+                    let a = locals[src1 as usize];
+                    let b = locals[src2 as usize];
+                    let res = if a.is_int() && b.is_int() { Value::from_i64(a.as_i64().wrapping_add(b.as_i64())) }
+                        else if a.is_numeric() && b.is_numeric() {
+                            let f1 = if a.is_int() { a.as_i64() as f64 } else { a.as_f64() };
+                            let f2 = if b.is_int() { b.as_i64() as f64 } else { b.as_f64() };
+                            Value::from_f64(f1 + f2)
+                        }
+                        else if a.is_ptr() && (a.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_STR) {
+                            Value::from_string(Arc::new(format!("{}{}", a.to_string(), b.to_string())))
+                        }
+                        else if b.is_ptr() && (b.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_STR) {
+                            Value::from_string(Arc::new(format!("{}{}", a.to_string(), b.to_string())))
+                        }
+                        else if a.is_date() && b.is_int() {
+                            Value::from_date(a.as_date() + (b.as_i64() * 86_400_000))
+                        }
+                        else if a.is_ptr() && (a.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_SET) &&
+                                b.is_ptr() && (b.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_SET) {
+                            let elements = set_op(&a.as_set().read().elements, &b.as_set().read().elements, 0);
+                            Value::from_set(Arc::new(RwLock::new(SetData { elements, cache: None })))
+                        }
+                        else { Value::from_bool(false) };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Sub { dst, src1, src2 } => {
+                    let a = locals[src1 as usize];
+                    let b = locals[src2 as usize];
+                    let res = if a.is_int() && b.is_int() { Value::from_i64(a.as_i64().wrapping_sub(b.as_i64())) }
+                        else if a.is_numeric() && b.is_numeric() {
+                            let f1 = if a.is_int() { a.as_i64() as f64 } else { a.as_f64() };
+                            let f2 = if b.is_int() { b.as_i64() as f64 } else { b.as_f64() };
+                            Value::from_f64(f1 - f2)
+                        }
+                        else if a.is_date() {
+                           if b.is_int() { Value::from_date(a.as_date() - (b.as_i64() * 86_400_000)) }
+                           else if b.is_date() { Value::from_i64(a.as_date() - b.as_date()) }
+                           else { Value::from_bool(false) }
+                        }
+                        else if a.is_int() && b.is_date() {
+                            Value::from_i64(a.as_i64() - b.as_date())
+                        }
+                        else if a.is_ptr() && (a.0 & 0x000F_0000_0000_0000) == TAG_SET &&
+                                b.is_ptr() && (b.0 & 0x000F_0000_0000_0000) == TAG_SET {
+                            let elements = set_op(&a.as_set().read().elements, &b.as_set().read().elements, 2);
+                            Value::from_set(Arc::new(RwLock::new(SetData { elements, cache: None })))
+                        }
+                        else { Value::from_bool(false) };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Mul { dst, src1, src2 } => {
+                    let a = locals[src1 as usize];
+                    let b = locals[src2 as usize];
+                    let res = if a.is_int() && b.is_int() { Value::from_i64(a.as_i64().wrapping_mul(b.as_i64())) }
+                        else if a.is_numeric() && b.is_numeric() {
+                            let f1 = if a.is_int() { a.as_i64() as f64 } else { a.as_f64() };
+                            let f2 = if b.is_int() { b.as_i64() as f64 } else { b.as_f64() };
+                            Value::from_f64(f1 * f2)
+                        }
+                        else if a.is_ptr() && (a.0 & 0x000F_0000_0000_0000) == TAG_SET &&
+                                b.is_ptr() && (b.0 & 0x000F_0000_0000_0000) == TAG_SET {
+                            let elements = set_op(&a.as_set().read().elements, &b.as_set().read().elements, 1);
+                            Value::from_set(Arc::new(RwLock::new(SetData { elements, cache: None })))
+                        }
+                        else {
+                            eprintln!("ERROR: Cannot multiply {} and {}{}", a.to_string(), b.to_string(), self.current_span_info(*ip));
+                            return OpResult::Halt;
+                        };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Div { dst, src1, src2 } => {
+                    let a = locals[src1 as usize];
+                    let b = locals[src2 as usize];
+                    let res = if a.is_int() && b.is_int() {
+                        let vb = b.as_i64();
+                        if vb == 0 { eprintln!("R300: Division by zero{}", self.current_span_info(*ip)); return OpResult::Halt; }
+                        Value::from_i64(a.as_i64() / vb)
+                    }
+                    else if a.is_numeric() && b.is_numeric() {
+                        let f1 = if a.is_int() { a.as_i64() as f64 } else { a.as_f64() };
+                        let f2 = if b.is_int() { b.as_i64() as f64 } else { b.as_f64() };
+                        if f2 == 0.0 { eprintln!("R300: Division by zero (float){}", self.current_span_info(*ip)); return OpResult::Halt; }
+                        Value::from_f64(f1 / f2)
+                    }
+                    else { return OpResult::Halt; };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Mod { dst, src1, src2 } => {
+                    let a = locals[src1 as usize];
+                    let b = locals[src2 as usize];
+                    let res = if a.is_int() && b.is_int() {
+                        let bv = b.as_i64();
+                        if bv != 0 { Value::from_i64(a.as_i64() % bv) } else { Value::from_bool(false) }
+                    } else if a.is_numeric() && b.is_numeric() {
+                        let f1 = if a.is_int() { a.as_i64() as f64 } else { a.as_f64() };
+                        let f2 = if b.is_int() { b.as_i64() as f64 } else { b.as_f64() };
+                        Value::from_f64(f1 % f2)
+                    } else { Value::from_bool(false) };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Pow { dst, src1, src2 } => {
+                    let a = locals[src1 as usize];
+                    let b = locals[src2 as usize];
+                    let res = if a.is_int() && b.is_int() { Value::from_i64(a.as_i64().pow(b.as_i64() as u32)) }
+                        else if a.is_numeric() && b.is_numeric() {
+                            let f1 = if a.is_int() { a.as_i64() as f64 } else { a.as_f64() };
+                            let f2 = if b.is_int() { b.as_i64() as f64 } else { b.as_f64() };
+                            Value::from_f64(f1.powf(f2))
+                        } else { Value::from_bool(false) };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Equal { dst, src1, src2 } => {
+                    let res = Value::from_bool(locals[src1 as usize] == locals[src2 as usize]);
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::NotEqual { dst, src1, src2 } => {
+                    let res = Value::from_bool(locals[src1 as usize] != locals[src2 as usize]);
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Greater { dst, src1, src2 } => {
+                    let res = Value::from_bool(locals[src1 as usize] > locals[src2 as usize]);
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Less { dst, src1, src2 } => {
+                    let res = Value::from_bool(locals[src1 as usize] < locals[src2 as usize]);
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::GreaterEqual { dst, src1, src2 } => {
+                    let res = Value::from_bool(locals[src1 as usize] >= locals[src2 as usize]);
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::LessEqual { dst, src1, src2 } => {
+                    let res = Value::from_bool(locals[src1 as usize] <= locals[src2 as usize]);
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::And { dst, src1, src2 } => {
+                    let a = locals[src1 as usize].as_bool();
+                    let b = locals[src2 as usize].as_bool();
+                    let res = Value::from_bool(a && b);
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Or { dst, src1, src2 } => {
+                    let a = locals[src1 as usize].as_bool();
+                    let b = locals[src2 as usize].as_bool();
+                    let res = Value::from_bool(a || b);
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Not { dst, src } => {
+                    let res = Value::from_bool(!locals[src as usize].as_bool());
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Has { dst, src1, src2 } => {
+                    let container = locals[src1 as usize];
+                    let item = locals[src2 as usize];
+                    let res = if container.is_string() && item.is_string() {
+                        let c_str = container.to_string();
+                        let i_str = item.to_string();
+                        Value::from_bool(c_str.contains(&i_str))
+                    } else if container.is_array() {
+                        let arr_rc = container.as_array();
+                        let ok = arr_rc.read().iter().any(|v| v == &item);
+                        Value::from_bool(ok)
+                    } else if container.is_ptr() && (container.0 & 0x000F_0000_0000_0000) == TAG_SET {
+                        let set_rc = container.as_set();
+                        let ok = set_rc.read().elements.contains(&item);
+                        Value::from_bool(ok)
+                    } else if container.is_map() {
+                        let map_rc = container.as_map();
+                        let ok = map_rc.read().iter().any(|(k, _)| k == &item);
+                        Value::from_bool(ok)
+                    } else {
+                        Value::from_bool(false)
+                    };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::Jump { target } => { 
+                    let target_ip = target as usize;
+                    if target_ip < current_ip {
+                        if target_ip < self.hot_counts.len() && !self.is_recording && self.trace_cache[target_ip].is_none() {
+                            let count = unsafe { self.hot_counts.get_unchecked_mut(target_ip) };
+                            *count += 1;
+                            if *count >= 50 {
+                                self.recording_trace = Some(Trace { ops: vec![], start_ip: target_ip, native_ptr: AtomicPtr::new(ptr::null_mut()) });
+                                self.is_recording = true;
+                            }
+                        }
+                    }
+                    *ip = target_ip; 
+                    continue; 
+                }
+                OpCode::JumpIfFalse { src, target } => {
+                    let val = locals[src as usize];
+                    let ok = if val.is_bool() { val.as_bool() } else { true };
+                    if !ok { *ip = target as usize; continue; }
+                }
+                OpCode::JumpIfTrue { src, target } => {
+                    let val = locals[src as usize];
+                    let ok = if val.is_bool() { val.as_bool() } else { false };
+                    if ok { *ip = target as usize; continue; }
+                }
+                OpCode::Return { src } => {
+                    let val = locals[src as usize];
+                    unsafe { val.inc_ref(); }
+                    *ip = bytecode.len();
+                    return OpResult::Return(Some(val));
+                }
+                OpCode::ReturnVoid => {
+                    *ip = bytecode.len();
+                    return OpResult::Return(None);
+                }
+                OpCode::Yield { src } => {
+                    let val = locals[src as usize];
+                    unsafe { val.inc_ref(); }
+                    self.fiber_yielded = true;
+                    return OpResult::Yield(Some(val));
+                }
+                OpCode::YieldVoid => {
+                    self.fiber_yielded = true;
+                    return OpResult::Yield(None);
+                }
+                OpCode::Halt => {
+                    return OpResult::Halt;
+                }
+                OpCode::Print { src } => {
+                    println!("{}", locals[src as usize].to_string());
+                }
+                OpCode::HaltAlert { src } => {
+                    println!("ALERT: {}", locals[src as usize].to_string());
+                }
+                OpCode::HaltError { src } => {
+                    eprintln!("ERROR: {}{}", locals[src as usize].to_string(), self.current_span_info(*ip));
+                    self.vm.error_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return OpResult::Halt;
+                }
+                OpCode::HaltFatal { src } => {
+                    eprintln!("FATAL: {}{}", locals[src as usize].to_string(), self.current_span_info(*ip));
+                    self.vm.error_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return OpResult::Halt;
+                }
+                OpCode::TerminalExit => {
+                    std::process::exit(0);
+                }
+                OpCode::TerminalRun { dst, cmd_src } => {
+                    let cmd = locals[cmd_src as usize].to_string();
+                    drop(glbs);
+                    let status = std::process::Command::new("cargo").args(["run", "--release", "--", &cmd]).status();
+                    glbs = vm_arc.globals.write();
+                    let success = status.map(|s| s.success()).unwrap_or(false);
+                    let res = Value::from_bool(success);
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::TerminalClear => {
+                    #[cfg(windows)]
+                    if let Err(_) = std::process::Command::new("cmd").args(["/c", "cls"]).status() {
+                        print!("\x1B[2J\x1B[1;1H");
+                    }
+                    #[cfg(not(windows))]
+                    print!("\x1B[2J\x1B[1;1H");
+                    let _ = std::io::stdout().flush();
+                }
+                OpCode::Call { dst, func_idx, base, arg_count } => {
+                    let args = &locals[(base as usize)..(base as usize + arg_count as usize)];
+                    drop(glbs);
+                    let call_res = self.run_frame(func_idx as usize, args);
+                    glbs = vm_arc.globals.write();
+                    if self.vm.error_count.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+                        return OpResult::Halt;
+                    }
+                    if let Some(res) = call_res {
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
+                    } else {
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = Value::from_bool(false);
+                    }
+                }
+
+                OpCode::MethodCall { dst, kind, base, arg_count } => {
+                    let receiver = locals[base as usize];
+                    let args: Vec<Value> = locals[(base as usize + 1)..(base as usize + 1 + arg_count as usize)].to_vec();
+                    drop(glbs);
+                    let ores = self.handle_method_call(dst, receiver, kind, &args, *ip, locals);
+                    glbs = vm_arc.globals.write();
+                    match ores {
+                        OpResult::Continue => {}
+                        _ => return ores,
+                    }
+                }
+                OpCode::MethodCallCustom { dst, method_name_idx, base, arg_count } => {
+                    let receiver = locals[base as usize];
+                    let method_name = self.ctx.constants[method_name_idx as usize].as_string();
+                    let args: Vec<Value> = locals[(base as usize + 1)..(base as usize + 1 + arg_count as usize)].to_vec();
+                    drop(glbs);
+                    let ores = self.handle_method_call_custom(dst, receiver, &method_name, &args, *ip, locals);
+                    glbs = vm_arc.globals.write();
+                    match ores {
+                        OpResult::Continue => {}
+                        _ => return ores,
+                    }
+                }
+                OpCode::Wait { src } => {
+                    let val = locals[src as usize];
+                    let ms = if val.is_int() { val.as_i64() as u64 } else if val.is_float() { val.as_f64() as u64 } else { 0 };
+                    drop(glbs);
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    glbs = vm_arc.globals.write();
+                }
+                OpCode::EnvGet { dst, src } => {
+                    let name = locals[src as usize].to_string();
+                    let res = match std::env::var(&name) {
+                        Ok(v) => Value::from_string(Arc::new(v)),
+                        Err(_) => Value::from_bool(false),
+                    };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::EnvArgs { dst } => {
+                    let args: Vec<Value> = std::env::args().map(|s| Value::from_string(Arc::new(s))).collect();
+                    let res = Value::from_array(Arc::new(RwLock::new(args)));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::DateNow { dst } => {
+                    let now = chrono::Local::now().timestamp_millis();
+                    let res = Value::from_date(now);
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::JsonParse { dst, src } => {
+                    let s = locals[src as usize].to_string();
+                    let res = match serde_json::from_str::<serde_json::Value>(&s) {
+                        Ok(j) => Value::from_json(Arc::new(RwLock::new(j))),
+                        Err(_) => Value::from_bool(false),
+                    };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::ArrayInit { dst, base, count } => {
+                    let mut elems = Vec::with_capacity(count as usize);
+                    for i in 0..count {
+                        let v = locals[base as usize + i as usize ];
+                        unsafe { v.inc_ref(); }
+                        elems.push(v);
+                    }
+                    let res = Value::from_array(Arc::new(RwLock::new(elems)));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::SetInit { dst, base, count } => {
+                    let mut elements = std::collections::BTreeSet::new();
+                    for i in 0..count {
+                        let v = locals[base as usize + i as usize ];
+                        unsafe { v.inc_ref(); }
+                        elements.insert(v);
+                    }
+                    let res = Value::from_set(Arc::new(RwLock::new(SetData { elements, cache: None })));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::MapInit { dst, base, count } => {
+                    let mut map = Vec::with_capacity(count as usize);
+                    for i in 0..count {
+                        let k = locals[base as usize + (i * 2) as usize];
+                        let v = locals[base as usize + (i * 2 + 1) as usize];
+                        unsafe { k.inc_ref(); v.inc_ref(); }
+                        map.push((k, v));
+                    }
+                    let res = Value::from_map(Arc::new(RwLock::new(map)));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::TableInit { dst, skeleton_idx, base, row_count } => {
+                    let skeleton_val = self.ctx.constants[skeleton_idx as usize];
+                    if skeleton_val.is_ptr() && (skeleton_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_TBL) {
+                        let col_def = skeleton_val.as_table().read().columns.clone();
+                        let non_auto_count = col_def.iter().filter(|c| !c.is_auto).count();
+                        let mut rows = Vec::with_capacity(row_count as usize);
+                        for r in 0..row_count {
+                            let mut row_vals = Vec::with_capacity(col_def.len());
+                            let mut data_idx = 0;
+                            for col in &col_def {
+                                if col.is_auto {
+                                    row_vals.push(Value::from_i64((r + 1) as i64));
+                                } else {
+                                    let v = locals[base as usize + (r as usize * non_auto_count) + data_idx];
+                                    unsafe { v.inc_ref(); }
+                                    row_vals.push(v);
+                                    data_idx += 1;
+                                }
+                            }
+                            rows.push(row_vals);
+                        }
+                        let res = Value::from_table(Arc::new(RwLock::new(TableData { columns: col_def, rows })));
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
+                    }
+                }
+                OpCode::SetIntersection { dst, src1, src2 } | OpCode::SetDifference { dst, src1, src2 } | OpCode::SetSymDifference { dst, src1, src2 } => {
+                    let a = locals[src1 as usize];
+                    let b = locals[src2 as usize];
+                    if a.is_ptr() && b.is_ptr() && (a.0 & 0x000F_0000_0000_0000) == TAG_SET && (b.0 & 0x000F_0000_0000_0000) == TAG_SET {
+                        let op_id = match op {
+                            OpCode::SetIntersection { .. } => 1,
+                            OpCode::SetDifference { .. }   => 2,
+                            _ => 3,
+                        };
+                        let elements = set_op(&a.as_set().read().elements, &b.as_set().read().elements, op_id);
+                        let res = Value::from_set(Arc::new(RwLock::new(SetData { elements, cache: None })));
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
+                    }
+                }
+                OpCode::RandomChoice { dst, src } => {
+                    let col = locals[src as usize];
+                    let res = if col.is_ptr() {
+                        let mut rng = rand::rng();
+                        use rand::Rng;
+                        match col.0 & 0x000F_0000_0000_0000 {
+                            TAG_ARR => {
+                                let a_rc = col.as_array();
+                                let arr = a_rc.read();
+                                if arr.is_empty() { Value::from_bool(false) }
+                                else { let v = arr[rng.random_range(0..arr.len())]; unsafe { v.inc_ref(); } v }
+                            }
+                            TAG_SET => {
+                                let s_rc = col.as_set();
+                                {
+                                    let s_read = s_rc.read();
+                                    if s_read.elements.is_empty() {
+                                        Value::from_bool(false)
+                                    } else if let Some(ref cache) = s_read.cache {
+                                        let v = cache[rng.random_range(0..cache.len())];
+                                        unsafe { v.inc_ref(); }
+                                        v
+                                    } else {
+                                        drop(s_read);
+                                        let mut s_write = s_rc.write();
+                                        if s_write.cache.is_none() {
+                                            s_write.cache = Some(s_write.elements.iter().cloned().collect());
+                                        }
+                                        let cache = s_write.cache.as_ref().unwrap();
+                                        let v = cache[rng.random_range(0..cache.len())];
+                                        unsafe { v.inc_ref(); }
+                                        v
+                                    }
+                                }
+                            }
+                            _ => Value::from_bool(false),
+                        }
+                    } else { Value::from_bool(false) };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::SetRange { dst, start, end, step, has_step } => {
+                    let s_val = locals[start as usize];
+                    let e_val = locals[end as usize];
+                    let st_val = if locals[has_step as usize].as_bool() { locals[step as usize] } else { Value::from_i64(1) };
+                    let mut elements = std::collections::BTreeSet::new();
+                    if s_val.is_int() && e_val.is_int() && st_val.is_int() {
+                        let mut curr = s_val.as_i64();
+                        let stop = e_val.as_i64();
+                        let inc = st_val.as_i64();
+                        if inc > 0 { while curr <= stop { elements.insert(Value::from_i64(curr)); curr += inc; } }
+                        else if inc < 0 { while curr >= stop { elements.insert(Value::from_i64(curr)); curr += inc; } }
+                    } else {
+                        let mut curr = s_val.as_f64();
+                        let stop = e_val.as_f64();
+                        let inc = if st_val.is_int() { st_val.as_i64() as f64 } else { st_val.as_f64() };
+                        if inc > 0.0 {
+                            while curr <= stop + 1e-9 {
+                                elements.insert(Value::from_f64(curr));
+                                curr += inc;
+                                if curr > stop + 1e6 { break; }
+                            }
+                        } else if inc < 0.0 {
+                            while curr >= stop - 1e-9 {
+                                elements.insert(Value::from_f64(curr));
+                                curr += inc;
+                                if curr < stop - 1e6 { break; }
+                            }
+                        }
+                    }
+                    let res = Value::from_set(Arc::new(RwLock::new(SetData { elements, cache: None })));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+
+                OpCode::StoreAppend { base } => {
+                    let path_str = locals[base as usize].to_string();
+                    let path = std::path::Path::new(&path_str);
+                    let content = locals[(base + 1) as usize].to_string();
+                    use std::io::Write as _;
+                    drop(glbs);
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(path) {
+                        let _ = write!(f, "{}", content);
+                    }
+                    glbs = vm_arc.globals.write();
+                }
+                OpCode::StoreExists { dst, base } => {
+                    let path = locals[base as usize].to_string();
+                    let res = Value::from_bool(std::path::Path::new(&path).exists());
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::StoreDelete { base } => {
+                    let path = locals[base as usize].to_string();
+                    let _ = std::fs::remove_file(path);
+                }
+                OpCode::JsonBindLocal { dst, json_src, path_src } => {
+                    let json_val = locals[json_src as usize];
+                    let path_val = locals[path_src as usize];
+                    if json_val.is_ptr() && (json_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_JSON) {
+                        let path = path_val.to_string();
+                        let json_arc = json_val.as_json();
+                        let mut j = json_arc.write();
+                        let res = j.pointer_mut(&normalize_json_path(&path)).cloned().unwrap_or(serde_json::Value::Null);
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = json_serde_to_value(&res);
+                    }
+                }
+                OpCode::JsonBind { idx, json_src, path_src } => {
+                    let json_val = locals[json_src as usize];
+                    let path_val = locals[path_src as usize];
+                    if json_val.is_ptr() && (json_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_JSON) {
+                        let path = path_val.to_string();
+                        let val = {
+                            let json_arc = json_val.as_json();
+                            let mut j = json_arc.write();
+                            let serde_res = j.pointer_mut(&normalize_json_path(&path)).cloned().unwrap_or(serde_json::Value::Null);
+                            json_serde_to_value(&serde_res)
+                        };
+                        let idx = idx as usize;
+                        if idx >= glbs.len() { glbs.resize(idx + 1, Value::from_bool(false)); }
+                        unsafe { glbs[idx].dec_ref(); }
+                        glbs[idx] = val;
+                    }
+                }
+                OpCode::JsonInjectLocal { table_reg, json_src, mapping_src } => {
+                    let table = locals[table_reg as usize];
+                    let json = locals[json_src as usize];
+                    let mapping = locals[mapping_src as usize];
+                    self.json_inject_table(&table, &json, &mapping);
+                }
+                OpCode::JsonInject { table_idx, json_src, mapping_src } => {
+                    let table = glbs[table_idx as usize];
+                    let json = locals[json_src as usize];
+                    let mapping = locals[mapping_src as usize];
+                    self.json_inject_table(&table, &json, &mapping);
+                }
+                OpCode::IncLocalLoopNext { inc_reg, reg, limit_reg, target } => {
+                    let r_idx = reg as usize;
+                    let l_idx = limit_reg as usize;
+                    let limit_i64 = unsafe { locals.get_unchecked(l_idx).as_i64() };
+                    let val = unsafe { *locals.get_unchecked(r_idx) };
+                    
+                    if val.is_int() {
+                        let next = val.as_i64().wrapping_add(1);
+                        unsafe { *locals.get_unchecked_mut(r_idx) = Value::from_i64(next); }
+                        
+                        let i_idx = inc_reg as usize;
+                        let i_val = unsafe { locals.get_unchecked_mut(i_idx) };
+                        if (i_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_INT) {
+                            let v = (i_val.0 & 0x0000_FFFF_FFFF_FFFF).wrapping_add(1) & 0x0000_FFFF_FFFF_FFFF;
+                            i_val.0 = (i_val.0 & 0xFFFF_0000_0000_0000) | v;
+                        } else {
+                            *i_val = Value::from_i64(i_val.as_i64().wrapping_add(1));
+                        }
+
+                        if next <= limit_i64 {
+                            if SHUTDOWN.load(Ordering::Relaxed) { return OpResult::Halt; }
+                            let target_ip = target as usize;
+                            if target_ip < self.hot_counts.len() {
+                                let hc = unsafe { self.hot_counts.get_unchecked_mut(target_ip) };
+                                *hc += 1;
+                                if *hc >= 50 && !self.is_recording && self.trace_cache[target_ip].is_none() {
+                                    self.recording_trace = Some(Trace { ops: vec![], start_ip: target_ip, native_ptr: AtomicPtr::new(ptr::null_mut()) });
+                                    self.is_recording = true;
+                                }
+                            }
+                            *ip = target_ip;
+                            continue;
+                        }
+                    }
+                }
+                OpCode::IncVarLoopNext { g_idx, reg, limit_reg, target } => {
+                    let r_idx = reg as usize;
+                    let l_idx = limit_reg as usize;
+                    let limit_i64 = unsafe { locals.get_unchecked(l_idx).as_i64() };
+                    let l_val = unsafe { locals.get_unchecked_mut(r_idx) };
+                    
+                    if (l_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_INT) {
+                        let next_v = (l_val.0 & 0x0000_FFFF_FFFF_FFFF).wrapping_add(1) & 0x0000_FFFF_FFFF_FFFF;
+                        l_val.0 = (l_val.0 & 0xFFFF_0000_0000_0000) | next_v;
+                        let next = l_val.as_i64();
+                        
+                        let g_idx = g_idx as usize;
+                        if g_idx < glbs.len() {
+                            let g_val = unsafe { glbs.get_unchecked_mut(g_idx) };
+                            if (g_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_INT) {
+                                let v = (g_val.0 & 0x0000_FFFF_FFFF_FFFF).wrapping_add(1) & 0x0000_FFFF_FFFF_FFFF;
+                                g_val.0 = (g_val.0 & 0xFFFF_0000_0000_0000) | v;
+                            } else {
+                                if g_val.is_ptr() { unsafe { g_val.dec_ref(); } }
+                                *g_val = Value::from_i64(g_val.as_i64().wrapping_add(1));
+                            }
+                        }
+                        if next <= limit_i64 {
+                            if SHUTDOWN.load(Ordering::Relaxed) { return OpResult::Halt; }
+                            let target_ip = target as usize;
+                            if target_ip < self.hot_counts.len() {
+                                let hc = unsafe { self.hot_counts.get_unchecked_mut(target_ip) };
+                                *hc += 1;
+                                if *hc >= 50 && !self.is_recording && self.trace_cache[target_ip].is_none() {
+                                    self.recording_trace = Some(Trace { ops: vec![], start_ip: target_ip, native_ptr: AtomicPtr::new(ptr::null_mut()) });
+                                    self.is_recording = true;
+                                }
+                            }
+                            *ip = target_ip;
+                            continue;
+                        }
+                    } else if l_val.is_int() {
+                        let next = l_val.as_i64().wrapping_add(1);
+                        *l_val = Value::from_i64(next);
+                        let g_idx = g_idx as usize;
+                        if g_idx < glbs.len() {
+                            let g_val = unsafe { glbs.get_unchecked_mut(g_idx) };
+                            if (g_val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_INT) {
+                                let v = (g_val.0 & 0x0000_FFFF_FFFF_FFFF).wrapping_add(1) & 0x0000_FFFF_FFFF_FFFF;
+                                g_val.0 = (g_val.0 & 0xFFFF_0000_0000_0000) | v;
+                            } else {
+                                if g_val.is_ptr() { unsafe { g_val.dec_ref(); } }
+                                *g_val = Value::from_i64(g_val.as_i64().wrapping_add(1));
+                            }
+                        }
+                        if next <= limit_i64 {
+                            if SHUTDOWN.load(Ordering::Relaxed) { return OpResult::Halt; }
+                            let target_ip = target as usize;
+                            if target_ip < self.hot_counts.len() {
+                                let hc = unsafe { self.hot_counts.get_unchecked_mut(target_ip) };
+                                *hc += 1;
+                                if *hc >= 50 && !self.is_recording && self.trace_cache[target_ip].is_none() {
+                                    self.recording_trace = Some(Trace { ops: vec![], start_ip: target_ip, native_ptr: AtomicPtr::new(ptr::null_mut()) });
+                                    self.is_recording = true;
+                                }
+                            }
+                            *ip = target_ip;
+                            continue;
+                        }
+                    }
+                }
+                OpCode::IncVar { idx } => {
+                    let idx = idx as usize;
+                    if idx < glbs.len() {
+                        let val = unsafe { glbs.get_unchecked_mut(idx) };
+                        if (val.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_INT) {
+                            let next = (val.0 & 0x0000_FFFF_FFFF_FFFF).wrapping_add(1) & 0x0000_FFFF_FFFF_FFFF;
+                            val.0 = (val.0 & 0xFFFF_0000_0000_0000) | next;
+                        } else {
+                            if val.is_ptr() { unsafe { val.dec_ref(); } }
+                            *val = Value::from_i64(val.as_i64().wrapping_add(1));
+                        }
+                    }
+                }
+                OpCode::SetUnion { dst, src1, src2 } => {
+                    let a = locals[src1 as usize];
+                    let b = locals[src2 as usize];
+                    if a.is_ptr() && b.is_ptr() && (a.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_SET) && (b.0 & 0xFFFF_0000_0000_0000) == (QNAN_BASE | TAG_SET) {
+                        let elements = set_op(&a.as_set().read().elements, &b.as_set().read().elements, 0);
+                        let res = Value::from_set(Arc::new(RwLock::new(SetData { elements, cache: None })));
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
+                    }
+                }
+                OpCode::IntConcat { dst, src1, src2 } => {
+                    let a = locals[src1 as usize];
+                    let b = locals[src2 as usize];
+                    let s = format!("{}{}", a.to_string(), b.to_string());
+                    let res = if let Ok(i) = s.parse::<i64>() { Value::from_i64(i) } else { Value::from_string(Arc::new(s)) };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::CryptoHash { dst, pass_src, alg_src } => {
+                    let password = locals[pass_src as usize].to_string();
+                    let algo = locals[alg_src as usize].to_string();
+                    drop(glbs);
+                    let res = match algo.as_str() {
+                        "bcrypt" => bcrypt::hash(&password, bcrypt::DEFAULT_COST).map(|h| Value::from_string(Arc::new(h))).unwrap_or(Value::from_bool(false)),
+                        "argon2" => {
+                            let mut salt_bytes = [0u8; 16];
+                            rand::fill(&mut salt_bytes);
+                            let salt = SaltString::encode_b64(&salt_bytes).unwrap();
+                            let argon2 = argon2::Argon2::default();
+                            argon2.hash_password(password.as_bytes(), &salt)
+                                .map(|h| Value::from_string(Arc::new(h.to_string())))
+                                .unwrap_or(Value::from_bool(false))
+                        }
+                        _ => Value::from_bool(false),
+                    };
+                    glbs = vm_arc.globals.write();
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::CryptoVerify { dst, pass_src, hash_src, alg_src } => {
+                    let password = locals[pass_src as usize].to_string();
+                    let hashed = locals[hash_src as usize].to_string();
+                    let algo = locals[alg_src as usize].to_string();
+                    drop(glbs);
+                    let ok = match algo.as_str() {
+                        "bcrypt" => bcrypt::verify(&password, &hashed).unwrap_or(false),
+                        "argon2" => {
+                            if let Ok(parsed_hash) = PasswordHash::new(&hashed) {
+                                argon2::Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok()
+                            } else { false }
+                        }
+                        _ => false,
+                    };
+                    glbs = vm_arc.globals.write();
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = Value::from_bool(ok);
+                }
+                OpCode::CryptoToken { dst, len_src } => {
+                    let len = locals[len_src as usize].as_i64() as usize;
+                    let token: String = (0..len).map(|_| {
+                        const CHARSET: &[u8] = b"0123456789abcdef";
+                        let idx = rand::rng().random_range(0..CHARSET.len());
+                        CHARSET[idx] as char
+                    }).collect();
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = Value::from_string(Arc::new(token));
+                }
+                OpCode::CastInt { dst, src } => {
+                    let val = locals[src as usize];
+                    let res = if val.is_int() { val } else if val.is_float() { Value::from_i64(val.as_f64() as i64) } else { Value::from_i64(0) };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::CastFloat { dst, src } => {
+                    let val = locals[src as usize];
+                    let res = if val.is_float() { val } else if val.is_int() { Value::from_f64(val.as_i64() as f64) } else { Value::from_f64(0.0) };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::CastString { dst, src } => {
+                    let res = Value::from_string(Arc::new(locals[src as usize].to_string()));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::CastBool { dst, src } => {
+                    let val = locals[src as usize];
+                    let res = Value::from_bool(val.as_bool());
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::IncLocal { reg } => {
+                    let val = locals[reg as usize];
+                    if val.is_int() {
+                        locals[reg as usize] = Value::from_i64(val.as_i64().wrapping_add(1));
+                    }
+                }
+                OpCode::LoopNext { reg, limit_reg, target } => {
+                    let val = locals[reg as usize];
+                    let limit = locals[limit_reg as usize];
+                    if val.is_int() && limit.is_int() {
+                        let v = val.as_i64().wrapping_add(1);
+                        locals[reg as usize] = Value::from_i64(v);
+                        if v <= limit.as_i64() {
+                            let target_ip = target as usize;
+                            if target_ip < self.hot_counts.len() {
+                                self.hot_counts[target_ip] += 1;
+                                if self.hot_counts[target_ip] >= 50 && !self.is_recording && self.trace_cache[target_ip].is_none() {
+                                    self.recording_trace = Some(Trace { ops: vec![], start_ip: target_ip, native_ptr: AtomicPtr::new(ptr::null_mut()) });
+                                    self.is_recording = true;
+                                }
+                            }
+                            *ip = target_ip;
+                            continue;
+                        }
+                    } else {
+                        eprintln!("ERROR: LoopNext on non-integers{}", self.current_span_info(current_ip));
+                        return OpResult::Halt;
+                    }
+                }
+                OpCode::FiberCreate { dst, func_idx, base, arg_count } => {
+                    let chunk = self.ctx.functions[func_idx as usize].clone();
+                    let args = &locals[(base as usize)..(base as usize + arg_count as usize)];
+                    let mut fiber_locals = args.to_vec();
+                    fiber_locals.resize(chunk.max_locals, Value::from_bool(false));
+                    let f = FiberState {
+                        func_id: func_idx as usize,
+                        ip: 0,
+                        locals: fiber_locals,
+                        yielded_value: None,
+                        is_done: false,
+                    };
+                    for v in &f.locals { unsafe { v.inc_ref(); } }
+                    let res = Value::from_fiber(Arc::new(RwLock::new(f)));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                OpCode::HttpCall { dst, method_idx, url_src, body_src } => {
+                    let url = locals[url_src as usize].to_string();
+                    let body = locals[body_src as usize].to_string();
+                    let method = self.ctx.constants[method_idx as usize].to_string();
+                    
+                    if url.contains("169.254.") || url.contains("instance-data") {
+                        let mut map = serde_json::Map::new();
+                        map.insert("ok".to_string(), serde_json::Value::Bool(false));
+                        map.insert("error".to_string(), serde_json::Value::String("SSRF attempt blocked".to_string()));
+                        let res = Value::from_json(Arc::new(RwLock::new(serde_json::Value::Object(map))));
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
+                        continue;
+                    }
+                    
+                    drop(glbs);
+                    let res = match method.to_uppercase().as_str() {
+                        "GET" => ureq::get(&url).call(),
+                        "POST" => ureq::post(&url).send_string(&body),
+                        _ => ureq::get(&url).call(),
+                    };
+                    glbs = vm_arc.globals.write();
+                    let val = Value::from_json(Arc::new(RwLock::new(build_response_json(res))));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = val;
+                }
+                OpCode::HttpRequest { dst, arg_src } => {
+                    let arg_val = locals[arg_src as usize];
+                    if arg_val.is_map() {
+                        let map_rc = arg_val.as_map();
+                        let map = map_rc.read();
+                        
+                        let method = map.iter().find(|(k, _)| k.is_string() && *k.as_string() == "method").map(|(_, v)| v.to_string()).unwrap_or_else(|| "GET".to_string());
+                        let url = map.iter().find(|(k, _)| k.is_string() && *k.as_string() == "url").map(|(_, v)| v.to_string()).unwrap_or_default();
+                        
+                        if let Err(e) = is_safe_url(&url) {
+                            let mut res_map = serde_json::Map::new();
+                            res_map.insert("ok".to_string(), serde_json::Value::Bool(false));
+                            res_map.insert("error".to_string(), serde_json::Value::String(e));
+                            let val = Value::from_json(Arc::new(RwLock::new(serde_json::Value::Object(res_map))));
+                            unsafe { locals[dst as usize].dec_ref(); }
+                            locals[dst as usize] = val;
+                        } else {
+                            drop(map);
+                            drop(glbs);
+                            
+                            let mut request = match method.to_uppercase().as_str() {
+                                "POST" => ureq::post(&url),
+                                "PUT" => ureq::put(&url),
+                                "DELETE" => ureq::delete(&url),
+                                "PATCH" => ureq::patch(&url),
+                                "HEAD" => ureq::head(&url),
+                                _ => ureq::get(&url),
+                            };
+                            
+                            let map = map_rc.read();
+                            if let Some((_, h_val)) = map.iter().find(|(k, _)| k.is_string() && *k.as_string() == "headers") {
+                                if h_val.is_map() {
+                                    let h_map_rc = h_val.as_map();
+                                    let h_map = h_map_rc.read();
+                                    for (k, v) in h_map.iter() {
+                                        request = request.set(&k.to_string(), &v.to_string());
+                                    }
+                                }
+                            }
+                            
+                            if let Some((_, t_val)) = map.iter().find(|(k, _)| k.is_string() && *k.as_string() == "timeout") {
+                                if t_val.is_int() {
+                                    request = request.timeout(std::time::Duration::from_millis(t_val.as_i64() as u64));
+                                }
+                            }
+                            
+                            let body_val = map.iter().find(|(k, _)| k.is_string() && *k.as_string() == "body").map(|(_, v)| *v);
+                            let response = if let Some(b) = body_val {
+                                request.send_string(&b.to_string())
+                            } else {
+                                request.call()
+                            };
+                            
+                            glbs = vm_arc.globals.write();
+                            let val = Value::from_json(Arc::new(RwLock::new(build_response_json(response))));
+                            unsafe { locals[dst as usize].dec_ref(); }
+                            locals[dst as usize] = val;
+                        }
+                    } else {
+                        let res = self.http_req_val.unwrap_or(Value::from_bool(false));
+                        unsafe { res.inc_ref(); }
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
+                    }
+                }
+                OpCode::HttpRespond { status_src, body_src, headers_src } => {
+                    let status = locals[status_src as usize].as_i64() as u32;
+                    let body_val = locals[body_src as usize];
+                    let body = if body_val.is_ptr() && (body_val.0 & 0x000F_0000_0000_0000) == TAG_JSON {
+                        body_val.as_json().read().to_string()
+                    } else if body_val.is_ptr() && (body_val.0 & 0x000F_0000_0000_0000) == TAG_STR {
+                        body_val.as_string().to_string()
+                    } else if body_val.is_ptr() && (body_val.0 & 0x000F_0000_0000_0000) == TAG_ARR {
+                         value_to_json(&body_val).to_string()
+                    } else if body_val.is_ptr() && (body_val.0 & 0x000F_0000_0000_0000) == TAG_MAP {
+                         value_to_json(&body_val).to_string()
+                    } else if body_val.is_ptr() && (body_val.0 & 0x000F_0000_0000_0000) == TAG_TBL {
+                         value_to_json(&body_val).to_string()
+                    } else {
+                        body_val.to_string()
+                    };
+                    let headers = locals[headers_src as usize];
+                    
+                    if let Some(req_mutex_arc) = self.http_req.clone() {
+                        let mut req_opt = req_mutex_arc.lock();
+                        if let Some(request) = req_opt.take() {
+                            let mut response = tiny_http::Response::from_string(body)
+                                .with_status_code(status);
+                            
+                            let mut ct_set = false;
+                            
+                            if headers.is_array() {
+                                let arr_rc = headers.as_array();
+                                let arr = arr_rc.read();
+                                for item in arr.iter() {
+                                    if item.is_map() {
+                                        let map_rc = item.as_map();
+                                        let map = map_rc.read();
+                                        for (k, v) in map.iter() {
+                                            let ks = k.to_string();
+                                            let vs = v.to_string();
+                                            if ks.to_lowercase() == "content-type" { ct_set = true; }
+                                            if let Ok(h) = tiny_http::Header::from_bytes(ks.as_bytes(), vs.as_bytes()) {
+                                                response = response.with_header(h);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            if !ct_set {
+                                response = response.with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                            }
+                            
+                            response = response.with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+                            response = response.with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS, DELETE, PATCH"[..]).unwrap());
+                            response = response.with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, Authorization, X-CSRF-TOKEN"[..]).unwrap());
+                            
+                            let _ = request.respond(response);
+                        }
+                    }
+                    return OpResult::Yield(None);
+                }
+                OpCode::HttpServe { func_idx: _, port_src, host_src, workers_src, routes_src } => {
+                    let port = locals[port_src as usize].as_i64() as u16;
+                    let host = locals[host_src as usize].to_string();
+                    let workers = locals[workers_src as usize].as_i64() as usize;
+                    let routes_val = locals[routes_src as usize];
+                    
+                    let addr = format!("{}:{}", host, port);
+                    let server = Arc::new(tiny_http::Server::http(&addr).expect("Failed to start server"));
+                    let mut routes = Vec::new();
+                    if routes_val.is_array() {
+                        let arr_rc = routes_val.as_array();
+                        let arr = arr_rc.read();
+                        for item in arr.iter() {
+                            if item.is_map() {
+                                let map_rc = item.as_map();
+                                let map = map_rc.read();
+                                if let Some((k, v)) = map.iter().next() {
+                                    if v.is_func() {
+                                        let fid = v.as_function() as usize;
+                                        routes.push((k.to_string(), fid));
+                                    }
+                                }
+                            }
+                        }
+                    } else if routes_val.is_map() {
+                        let map_rc = routes_val.as_map();
+                        let map = map_rc.read();
+                        for (k, v) in map.iter() {
+                            if v.is_func() {
+                                let fid = v.as_function() as usize;
+                                routes.push((k.to_string(), fid));
+                            }
+                        }
+                    }
+
+                    
+                    drop(glbs);
+                    let routes = Arc::new(routes);
+                    for _ in 0..workers {
+                        let server = server.clone();
+                        let routes = routes.clone();
+                        let vm = vm_arc.clone();
+                        let ctx = self.ctx.clone();
+                        std::thread::spawn(move || {
+                            while !SHUTDOWN.load(Ordering::Relaxed) {
+                                if let Ok(Some(mut request)) = server.recv_timeout(std::time::Duration::from_millis(100)) {
+                                    let method = request.method().to_string();
+                                    let url = request.url().to_string();
+                                    let route_key = format!("{} {}", method, url).to_lowercase();
+
+
+                                    if method == "OPTIONS" {
+                                        let response = tiny_http::Response::from_string("")
+                                            .with_status_code(204)
+                                            .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
+                                            .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS, DELETE, PATCH"[..]).unwrap())
+                                            .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, Authorization, X-CSRF-TOKEN"[..]).unwrap());
+                                        let _ = request.respond(response);
+                                        continue;
+                                    }
+                                    
+                                    let handler_idx = routes.iter()
+                                        .find(|(r, _)| {
+                                            let r_norm = r.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+                                            let rk_norm = route_key.split_whitespace().collect::<Vec<_>>().join(" ");
+                                            r_norm == rk_norm || *r == "*" 
+                                        })
+                                        .map(|(_, idx)| *idx);
+                                    
+                                    if let Some(fid) = handler_idx {
+                                        let mut body = String::new();
+                                        let _ = request.as_reader().read_to_string(&mut body);
+                                        
+                                        let mut req_map = serde_json::Map::new();
+                                        req_map.insert("method".into(), method.into());
+                                        req_map.insert("url".into(), url.into());
+                                        let body_json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
+                                        req_map.insert("body".into(), body_json);
+                                        let mut ip_str = request.remote_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+                                        if ip_str == "::1" { ip_str = "127.0.0.1".to_string(); }
+                                        req_map.insert("ip".into(), ip_str.into());
+                                        
+                                        let mut headers_map = serde_json::Map::new();
+                                        for h in request.headers() {
+                                            headers_map.insert(h.field.to_string().to_lowercase(), h.value.to_string().into());
+                                        }
+                                        req_map.insert("headers".into(), serde_json::Value::Object(headers_map));
+                                        
+                                        let req_val = Value::from_json(Arc::new(RwLock::new(serde_json::Value::Object(req_map))));
+                                        unsafe { req_val.inc_ref(); } 
+                                        
+                                        let req_mutex_arc = Arc::new(Mutex::new(Some(request)));
+                                         let mut sub_executor = Executor {
+                                            vm: vm.clone(),
+                                            ctx: ctx.clone(), 
+                                            current_spans: None,
+                                            fiber_yielded: false,
+                                            hot_counts: vec![0; 1024],
+                                            recording_trace: None,
+                                            is_recording: false,
+                                            trace_cache: vec![None; 1024],
+                                            http_req: Some(req_mutex_arc.clone()),
+                                            http_req_val: Some(req_val),
+                                         };
+                                         
+                                         let chunk = sub_executor.ctx.functions[fid].clone();
+                                         let mut ip = 0;
+                                         let mut locals = vec![req_val];
+                                         unsafe { req_val.inc_ref(); } 
+                                         locals.resize(chunk.max_locals.max(1), Value::from_bool(false));
+                                         
+                                         let ores = sub_executor.execute_bytecode(&chunk.bytecode, &mut ip, &mut locals);
+
+                                         let mut req_opt = req_mutex_arc.lock();
+                                         if let Some(req) = req_opt.take() {
+                                             let response = tiny_http::Response::from_string("Internal Server Error (No Response Sent)")
+                                                 .with_status_code(500)
+                                                 .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
+                                                 .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/plain"[..]).unwrap());
+                                             let _ = req.respond(response);
+                                         }
+
+                                         for v in locals { unsafe { v.dec_ref(); } }
+                                         unsafe { req_val.dec_ref(); }
+                                    } else {
+                                        let response = tiny_http::Response::from_string("Not Found")
+                                            .with_status_code(404)
+                                            .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
+                                            .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS, DELETE, PATCH"[..]).unwrap())
+                                            .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, Authorization, X-CSRF-TOKEN"[..]).unwrap());
+                                        let _ = request.respond(response);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    
+                    while !SHUTDOWN.load(Ordering::Relaxed) {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    }
+                    return OpResult::Halt;
+                }
+                OpCode::StoreWrite { base } => {
+                    let path_str = locals[base as usize].to_string();
+                    let path = std::path::Path::new(&path_str);
+                    let content = locals[(base + 1) as usize].to_string();
+                    drop(glbs);
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(path, content);
+                    glbs = vm_arc.globals.write();
+                }
+                OpCode::StoreRead { dst, base } => {
+                    let path = locals[base as usize].to_string();
+                    drop(glbs);
+                    let res = std::fs::read_to_string(path).map(|s| Value::from_string(Arc::new(s))).unwrap_or(Value::from_bool(false));
+                    glbs = vm_arc.globals.write();
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
+                _ => {
+                    eprintln!("Halted: Opcode {:?} not yet implemented for register VM{}", op, self.current_span_info(*ip));
+                    return OpResult::Halt;
+                }
+            }
+        }
+        OpResult::Continue
+    }
+
+    fn json_inject_table(&mut self, table_val: &Value, json_val: &Value, mapping_val: &Value) {
+        if !table_val.is_ptr() || (table_val.0 & 0x000F_0000_0000_0000) != TAG_TBL { return; }
+        if !json_val.is_ptr() || (json_val.0 & 0x000F_0000_0000_0000) != TAG_JSON { return; }
+        if !mapping_val.is_ptr() || (mapping_val.0 & 0x000F_0000_0000_0000) != TAG_MAP { return; }
+
+        let table_rc = table_val.as_table();
+        let mut table = table_rc.write();
+        let json_rc = json_val.as_json();
+        let json = json_rc.read();
+        let mapping_rc = mapping_val.as_map();
+        let mapping = mapping_rc.read();
+        
+        inject_json_into_table(&mut table, &json, &mapping);
+    }
+
+    fn handle_array_method(&mut self, dst: u8, arr_rc: Arc<RwLock<Vec<Value>>>, kind: MethodKind, args: &[Value], ip: usize, locals: &mut [Value]) -> OpResult {
         match kind {
-            MethodKind::Push => { arr_rc.write().push(args[0].clone()); self.stack.push(Value::Bool(true)); }
-            MethodKind::Pop  => { let res = arr_rc.write().pop().unwrap_or(Value::Bool(false)); self.stack.push(res); }
-            MethodKind::Len | MethodKind::Count | MethodKind::Size => self.stack.push(Value::Int(arr_rc.read().len() as i64)),
-            MethodKind::Clear => { arr_rc.write().clear(); self.stack.push(Value::Bool(true)); }
-            MethodKind::Contains => self.stack.push(Value::Bool(arr_rc.read().contains(&args[0]))),
-            MethodKind::IsEmpty  => self.stack.push(Value::Bool(arr_rc.read().is_empty())),
+            MethodKind::Push => { 
+                let val = args[0];
+                unsafe { val.inc_ref(); }
+                arr_rc.write().push(val); 
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Pop  => { 
+                let res = arr_rc.write().pop().unwrap_or(Value::from_bool(false)); 
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Len | MethodKind::Count | MethodKind::Size => {
+                let res = Value::from_i64(arr_rc.read().len() as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Clear => { 
+                let mut arr = arr_rc.write();
+                for v in arr.drain(..) { unsafe { v.dec_ref(); } }
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Contains => {
+                let res = Value::from_bool(arr_rc.read().contains(&args[0]));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::IsEmpty  => {
+                let res = Value::from_bool(arr_rc.read().is_empty());
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
             MethodKind::Get => {
                 let arr = arr_rc.read();
-                if let Value::Int(i) = args[0] {
+                if args[0].is_int() {
+                    let i = args[0].as_i64();
                     if i >= 0 && (i as usize) < arr.len() {
-                        self.stack.push(arr[i as usize].clone());
+                        let v = arr[i as usize];
+                        unsafe { v.inc_ref(); }
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = v;
                     } else {
                         eprintln!("R303: Array index out of bounds: {}{}", i, self.current_span_info(ip));
                         return OpResult::Halt;
                     }
-                } else { self.stack.push(Value::Bool(false)); }
+                } else { 
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = Value::from_bool(false);
+                }
             }
             MethodKind::Insert => {
-                if let (Value::Int(i), val) = (args[0].clone(), args[1].clone()) {
+                if args[0].is_int() {
+                    let i = args[0].as_i64();
+                    let val = args[1];
                     let mut arr = arr_rc.write();
                     if i >= 0 && (i as usize) <= arr.len() {
+                        unsafe { val.inc_ref(); }
                         arr.insert(i as usize, val);
-                        self.stack.push(Value::Bool(true));
+                        let res = Value::from_bool(true);
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
                     } else {
                         eprintln!("R303: Array insert index out of bounds: {}{}", i, self.current_span_info(ip));
                         return OpResult::Halt;
                     }
-                } else { self.stack.push(Value::Bool(false)); }
+                } else { 
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = Value::from_bool(false);
+                }
             }
             MethodKind::Update => {
-                if let (Value::Int(i), val) = (args[0].clone(), args[1].clone()) {
+                if args[0].is_int() {
+                    let i = args[0].as_i64();
+                    let val = args[1];
                     let mut arr = arr_rc.write();
                     if i >= 0 && (i as usize) < arr.len() {
+                        unsafe { val.inc_ref(); }
+                        let old = arr[i as usize];
                         arr[i as usize] = val;
-                        self.stack.push(Value::Bool(true));
+                        unsafe { old.dec_ref(); }
+                        let res = Value::from_bool(true);
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
                     } else {
                         eprintln!("R303: Array update index out of bounds: {}{}", i, self.current_span_info(ip));
                         return OpResult::Halt;
                     }
-                } else { self.stack.push(Value::Bool(false)); }
+                } else { 
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = Value::from_bool(false);
+                }
             }
             MethodKind::Delete => {
-                if let Value::Int(i) = args[0] {
+                if args[0].is_int() {
+                    let i = args[0].as_i64();
                     let mut arr = arr_rc.write();
                     if i >= 0 && (i as usize) < arr.len() {
-                        arr.remove(i as usize);
-                        self.stack.push(Value::Bool(true));
+                        let old = arr.remove(i as usize);
+                        unsafe { old.dec_ref(); }
+                        let res = Value::from_bool(true);
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
                     } else {
                         eprintln!("R303: Array delete index out of bounds: {}{}", i, self.current_span_info(ip));
                         return OpResult::Halt;
                     }
-                } else { self.stack.push(Value::Bool(false)); }
+                } else { 
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = Value::from_bool(false);
+                }
             }
             MethodKind::Find => {
                 let needle = &args[0];
                 let arr = arr_rc.read();
                 let idx = arr.iter().position(|v| v == needle).map(|i| i as i64).unwrap_or(-1);
-                self.stack.push(Value::Int(idx));
+                let res = Value::from_i64(idx);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Join => {
-                let sep = if let Value::String(s) = &args[0] { s.as_str() } else { "" };
+                let sep = if args[0].is_ptr() && (args[0].0 & 0x000F_0000_0000_0000) == TAG_STR {
+                    let s = args[0].as_string();
+                    (*s).clone()
+                } else { "".to_string() };
                 let arr = arr_rc.read();
-                let res = arr.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(sep);
-                self.stack.push(Value::String(res));
+                let res_str = arr.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(&sep);
+                let res = Value::from_string(Arc::new(res_str));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
-            MethodKind::Show => { println!("{}", Value::Array(arr_rc.clone())); self.stack.push(Value::Bool(true)); }
+            MethodKind::Show => { 
+                let arr_val = Value::from_array(arr_rc.clone());
+                println!("{}", arr_val.to_string()); 
+                unsafe { arr_val.dec_ref(); }
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
             MethodKind::Sort => {
                 arr_rc.write().sort();
-                self.stack.push(Value::Bool(true));
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Reverse => {
                 arr_rc.write().reverse();
-                self.stack.push(Value::Bool(true));
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             _ => { eprintln!("Method {:?} not supported for Array{}", kind, self.current_span_info(ip)); return OpResult::Halt; }
         }
         OpResult::Continue
     }
 
-    fn handle_set_method(&mut self, set_rc: Arc<RwLock<std::collections::BTreeSet<Value>>>, kind: MethodKind, args: Vec<Value>, ip: usize) -> OpResult {
+    fn handle_set_method(&mut self, dst: u8, set_rc: Arc<RwLock<SetData>>, kind: MethodKind, args: &[Value], ip: usize, locals: &mut [Value]) -> OpResult {
+        let mut set_data = set_rc.write();
         match kind {
-            MethodKind::Add => { set_rc.write().insert(args[0].clone()); self.stack.push(Value::Bool(true)); }
-            MethodKind::Remove   => { let ok = set_rc.write().remove(&args[0]); self.stack.push(Value::Bool(ok)); }
-            MethodKind::Len | MethodKind::Count | MethodKind::Size => self.stack.push(Value::Int(set_rc.read().len() as i64)),
-            MethodKind::Has | MethodKind::Contains => self.stack.push(Value::Bool(set_rc.read().contains(&args[0]))),
-            MethodKind::IsEmpty  => self.stack.push(Value::Bool(set_rc.read().is_empty())),
-            MethodKind::Clear    => { set_rc.write().clear(); self.stack.push(Value::Bool(true)); }
-            MethodKind::Show     => { println!("{}", Value::Set(set_rc.clone())); self.stack.push(Value::Bool(true)); }
+            MethodKind::Add => { 
+                let val = args[0];
+                unsafe { val.inc_ref(); }
+                if set_data.elements.insert(val) {
+                    set_data.cache = None;
+                }
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Remove   => { 
+                let res_bool = set_data.elements.remove(&args[0]);
+                if res_bool {
+                    set_data.cache = None;
+                }
+                let res = Value::from_bool(res_bool);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Has | MethodKind::Contains => {
+                let res = Value::from_bool(set_data.elements.contains(&args[0]));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Len | MethodKind::Count | MethodKind::Size => {
+                let res = Value::from_i64(set_data.elements.len() as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Clear => { 
+                for v in set_data.elements.iter() { unsafe { v.dec_ref(); } }
+                set_data.elements.clear();
+                set_data.cache = None;
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::IsEmpty  => {
+                let res = Value::from_bool(set_data.elements.is_empty());
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Values => {
+                let mut vec = Vec::with_capacity(set_data.elements.len());
+                for v in set_data.elements.iter() {
+                    unsafe { v.inc_ref(); }
+                    vec.push(*v);
+                }
+                let res = Value::from_array(Arc::new(RwLock::new(vec)));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Show     => { 
+                drop(set_data);
+                let set_val = Value::from_set(set_rc.clone());
+                println!("{}", set_val.to_string()); 
+                unsafe { set_val.dec_ref(); }
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
             _ => { eprintln!("Method {:?} not supported for Set{}", kind, self.current_span_info(ip)); return OpResult::Halt; }
         }
         OpResult::Continue
     }
 
-    fn handle_string_method(&mut self, s: String, kind: MethodKind, args: Vec<Value>, ip: usize) -> OpResult {
+    fn handle_string_method(&mut self, dst: u8, s: &str, kind: MethodKind, args: &[Value], ip: usize, locals: &mut [Value]) -> OpResult {
         match kind {
-            MethodKind::Length | MethodKind::Size => self.stack.push(Value::Int(s.chars().count() as i64)),
-            MethodKind::Upper  => self.stack.push(Value::String(s.to_uppercase())),
-            MethodKind::Lower  => self.stack.push(Value::String(s.to_lowercase())),
-            MethodKind::Trim   => self.stack.push(Value::String(s.trim().to_string())),
+            MethodKind::Length | MethodKind::Size => {
+                let res = Value::from_i64(s.chars().count() as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Upper  => {
+                let res = Value::from_string(Arc::new(s.to_uppercase()));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Lower  => {
+                let res = Value::from_string(Arc::new(s.to_lowercase()));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Trim   => {
+                let res = Value::from_string(Arc::new(s.trim().to_string()));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
             MethodKind::IndexOf => {
-                if let Some(Value::String(sub)) = args.first() {
-                    let idx = s.find(sub).map(|i| i as i64).unwrap_or(-1);
-                    self.stack.push(Value::Int(idx));
-                } else { self.stack.push(Value::Int(-1)); }
+                let res = if let Some(v) = args.first() {
+                    if v.is_ptr() && (v.0 & 0x000F_0000_0000_0000) == TAG_STR {
+                        let sub = v.as_string();
+                        let idx = s.find(sub.as_ref()).map(|i| i as i64).unwrap_or(-1);
+                        Value::from_i64(idx)
+                    } else { Value::from_i64(-1) }
+                } else { Value::from_i64(-1) };
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::LastIndexOf => {
-                if let Some(Value::String(sub)) = args.first() {
-                    let idx = s.rfind(sub).map(|i| i as i64).unwrap_or(-1);
-                    self.stack.push(Value::Int(idx));
-                } else { self.stack.push(Value::Int(-1)); }
+                let res = if let Some(v) = args.first() {
+                    if v.is_ptr() && (v.0 & 0x000F_0000_0000_0000) == TAG_STR {
+                        let sub = v.as_string();
+                        let idx = s.rfind(sub.as_ref()).map(|i| i as i64).unwrap_or(-1);
+                        Value::from_i64(idx)
+                    } else { Value::from_i64(-1) }
+                } else { Value::from_i64(-1) };
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Replace => {
                 if args.len() != 2 { return OpResult::Halt; }
                 let from = args[0].to_string();
                 let to   = args[1].to_string();
-                if from.is_empty() { eprintln!("R307: .replace() called with empty 'from'{}", self.current_span_info(ip)); return OpResult::Halt; }
-                self.stack.push(Value::String(s.replace(&from, &to)));
+                if from.is_empty() { 
+                    eprintln!("R307: .replace() called with empty 'from'{}", self.current_span_info(ip)); 
+                    return OpResult::Halt; 
+                }
+                let res = Value::from_string(Arc::new(s.replace(&from, &to)));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Slice => {
                 if args.len() != 2 { return OpResult::Halt; }
-                let start = if let Value::Int(i) = args[0] { i } else { return OpResult::Halt; };
-                let end   = if let Value::Int(i) = args[1] { i } else { return OpResult::Halt; };
+                if !args[0].is_int() || !args[1].is_int() { return OpResult::Halt; }
+                let start = args[0].as_i64();
+                let end   = args[1].as_i64();
                 let chars: Vec<char> = s.chars().collect();
                 let len = chars.len() as i64;
                 if start < 0 || end > len || start > end {
                     eprintln!("R303: String.slice out of bounds [{}, {}] for len {}{}", start, end, len, self.current_span_info(ip));
                     return OpResult::Halt;
                 }
-                self.stack.push(Value::String(chars[start as usize..end as usize].iter().collect()));
+                let res = Value::from_string(Arc::new(chars[start as usize..end as usize].iter().collect::<String>()));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Split => {
                 if args.is_empty() { return OpResult::Halt; }
                 let sep = args[0].to_string();
-                let parts: Vec<Value> = s.split(&sep).map(|p| Value::String(p.to_string())).collect();
-                self.stack.push(Value::Array(Arc::new(RwLock::new(parts))));
+                let parts: Vec<Value> = s.split(&sep).map(|p| Value::from_string(Arc::new(p.to_string()))).collect();
+                let res = Value::from_array(Arc::new(RwLock::new(parts)));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::StartsWith => {
                 if args.is_empty() { return OpResult::Halt; }
                 let prefix = args[0].to_string();
-                self.stack.push(Value::Bool(s.starts_with(prefix.as_str())));
+                let res = Value::from_bool(s.starts_with(prefix.as_str()));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::EndsWith => {
                 if args.is_empty() { return OpResult::Halt; }
                 let suffix = args[0].to_string();
-                self.stack.push(Value::Bool(s.ends_with(suffix.as_str())));
+                let res = Value::from_bool(s.ends_with(suffix.as_str()));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::ToInt => {
                 match s.trim().parse::<i64>() {
-                    Ok(n) => self.stack.push(Value::Int(n)),
+                    Ok(n) => {
+                        let res = Value::from_i64(n);
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
+                    }
                     Err(_) => {
                         eprintln!("halt.error: Cannot convert \"{}\" to Integer{}", s, self.current_span_info(ip));
                         return OpResult::Halt;
@@ -2008,75 +3174,136 @@ impl Executor {
             }
             MethodKind::ToFloat => {
                 match s.trim().parse::<f64>() {
-                    Ok(f) => self.stack.push(Value::Float(f)),
+                    Ok(f) => {
+                        let res = Value::from_f64(f);
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
+                    }
                     Err(_) => {
                         eprintln!("halt.error: Cannot convert \"{}\" to Float{}", s, self.current_span_info(ip));
                         return OpResult::Halt;
                     }
                 }
             }
-            _ => { eprintln!("Method {:?} not supported for String{}", kind, self.current_span_info(ip)); return OpResult::Halt; }
+            _ => {
+                eprintln!("Method {:?} not found on String{}", kind, self.current_span_info(ip));
+                return OpResult::Halt;
+            }
         }
         OpResult::Continue
     }
 
-    fn handle_map_method(&mut self, map_rc: Arc<RwLock<Vec<(Value, Value)>>>, kind: MethodKind, args: Vec<Value>, ip: usize) -> OpResult {
+    fn handle_map_method(&mut self, dst: u8, map_rc: Arc<RwLock<Vec<(Value, Value)>>>, kind: MethodKind, args: &[Value], ip: usize, locals: &mut [Value]) -> OpResult {
         match kind {
             MethodKind::Get => {
                 let key = &args[0];
                 let map = map_rc.read();
                 if let Some((_, v)) = map.iter().find(|(k, _)| k == key) {
-                    self.stack.push(v.clone());
+                    unsafe { v.inc_ref(); }
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = *v;
                 } else {
-                    eprintln!("R304: Map key not found: {}{}", key, self.current_span_info(ip));
+                    eprintln!("R304: Map key not found: {}{}", key.to_string(), self.current_span_info(ip));
                     return OpResult::Halt;
                 }
             }
             MethodKind::Set | MethodKind::Insert => {
-                let key = args[0].clone(); let val = args[1].clone();
+                let key = args[0]; 
+                let val = args[1];
                 let mut map = map_rc.write();
-                if let Some(e) = map.iter_mut().find(|(k, _)| *k == key) { e.1 = val; }
-                else { map.push((key, val)); }
-                self.stack.push(Value::Bool(true));
+                unsafe { key.inc_ref(); val.inc_ref(); }
+                if let Some(e) = map.iter_mut().find(|(k, _)| *k == key) { 
+                    let old_k = e.0;
+                    let old_v = e.1;
+                    e.0 = key;
+                    e.1 = val;
+                    unsafe { old_k.dec_ref(); old_v.dec_ref(); }
+                } else { map.push((key, val)); }
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
-            MethodKind::Len | MethodKind::Count | MethodKind::Size => self.stack.push(Value::Int(map_rc.read().len() as i64)),
+            MethodKind::Len | MethodKind::Count | MethodKind::Size => {
+                let res = Value::from_i64(map_rc.read().len() as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
             MethodKind::Keys => {
-                let keys: Vec<Value> = map_rc.read().iter().map(|(k, _)| k.clone()).collect();
-                self.stack.push(Value::Array(Arc::new(RwLock::new(keys))));
+                let mut keys = Vec::new();
+                for (k, _) in map_rc.read().iter() { 
+                    unsafe { k.inc_ref(); }
+                    keys.push(*k);
+                }
+                let res = Value::from_array(Arc::new(RwLock::new(keys)));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Values => {
-                let vals: Vec<Value> = map_rc.read().iter().map(|(_, v)| v.clone()).collect();
-                self.stack.push(Value::Array(Arc::new(RwLock::new(vals))));
+                let mut vals = Vec::new();
+                for (_, v) in map_rc.read().iter() {
+                    unsafe { v.inc_ref(); }
+                    vals.push(*v);
+                }
+                let res = Value::from_array(Arc::new(RwLock::new(vals)));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Contains => {
                 let has = map_rc.read().iter().any(|(k, _)| k == &args[0]);
-                self.stack.push(Value::Bool(has));
+                let res = Value::from_bool(has);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Remove | MethodKind::Delete => {
                 let key = &args[0];
                 let mut map = map_rc.write();
                 let before = map.len();
-                map.retain(|(k, _)| k != key);
-                self.stack.push(Value::Bool(map.len() < before));
+                if let Some(pos) = map.iter().position(|(k, _)| k == key) {
+                    let (k, v) = map.remove(pos);
+                    unsafe { k.dec_ref(); v.dec_ref(); }
+                }
+                let res = Value::from_bool(map.len() < before);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
-            MethodKind::Clear => { map_rc.write().clear(); self.stack.push(Value::Bool(true)); }
-            MethodKind::Show  => { println!("{}", Value::Map(map_rc.clone())); self.stack.push(Value::Bool(true)); }
-            _ => { eprintln!("Method {:?} not supported for Map{}", kind, self.current_span_info(ip)); return OpResult::Halt; }
+            MethodKind::Clear => { 
+                let mut map = map_rc.write();
+                for (k, v) in map.drain(..) { unsafe { k.dec_ref(); v.dec_ref(); } }
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Show  => { 
+                let map_val = Value::from_map(map_rc.clone());
+                println!("{}", map_val.to_string()); 
+                unsafe { map_val.dec_ref(); }
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            _ => { 
+                eprintln!("Method {:?} not supported for Map{}", kind, self.current_span_info(ip)); 
+                return OpResult::Halt; 
+            }
         }
         OpResult::Continue
     }
 
-    fn handle_table_method(&mut self, t_rc: Arc<RwLock<TableData>>, kind: MethodKind, args: Vec<Value>, ip: usize) -> OpResult {
+    fn handle_table_method(&mut self, dst: u8, t_rc: Arc<RwLock<TableData>>, kind: MethodKind, args: &[Value], ip: usize, locals: &mut [Value]) -> OpResult {
         let t = t_rc.read();
         match kind {
             MethodKind::Count | MethodKind::Len | MethodKind::Size => {
-                self.stack.push(Value::Int(t.rows.len() as i64));
+                let res = Value::from_i64(t.rows.len() as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Show => {
-                for col in &t.columns { print!("{}\t", col.name); }
-                println!();
-                for row in &t.rows { for v in row { print!("{:?}\t", v); } println!(); }
-                self.stack.push(Value::Bool(true));
+                let t_val = Value::from_table(t_rc.clone());
+                println!("{}", t_val.to_string());
+                unsafe { t_val.dec_ref(); }
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Insert | MethodKind::Add => {
                 drop(t);
@@ -2088,71 +3315,117 @@ impl Executor {
                     if col.is_auto {
                         let cidx = cols.iter().position(|c| c.name == col.name).unwrap();
                         let max = t_mut.rows.iter()
-                            .filter_map(|r| if let Value::Int(i) = r[cidx] { Some(i) } else { None })
+                            .filter_map(|r| if r[cidx].is_int() { Some(r[cidx].as_i64()) } else { None })
                             .max().unwrap_or(0);
-                        row.push(Value::Int(max + 1));
+                        row.push(Value::from_i64(max + 1));
                     } else {
-                        row.push(args.get(ai).cloned().unwrap_or(Value::Bool(false)));
+                        let val = args.get(ai).cloned().unwrap_or(Value::from_bool(false));
+                        unsafe { val.inc_ref(); }
+                        row.push(val);
                         ai += 1;
                     }
                 }
                 t_mut.rows.push(row);
-                self.stack.push(Value::Bool(true));
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Update => {
-                let idx = if let Value::Int(i) = args[0] { i } else { -1 };
+                let idx = if args[0].is_int() { args[0].as_i64() } else { -1 };
                 let vals = &args[1];
                 drop(t);
                 if idx >= 0 {
                     let mut t_mut = t_rc.write();
                     if (idx as usize) < t_mut.rows.len() {
-                        if let Value::Array(arr_rc) = vals {
+                        if vals.is_ptr() && (vals.0 & 0x000F_0000_0000_0000) == TAG_ARR {
+                            let arr_rc = vals.as_array();
                             let arr = arr_rc.read();
                             let mut ai = 0usize;
                             for ci in 0..t_mut.columns.len() {
                                 if !t_mut.columns[ci].is_auto {
                                     if ai < arr.len() {
-                                        t_mut.rows[idx as usize][ci] = arr[ai].clone();
+                                        let val = arr[ai];
+                                        unsafe { val.inc_ref(); }
+                                        let old = t_mut.rows[idx as usize][ci];
+                                        t_mut.rows[idx as usize][ci] = val;
+                                        unsafe { old.dec_ref(); }
                                         ai += 1;
                                     }
                                 }
                             }
-                            self.stack.push(Value::Bool(true));
-                        } else { self.stack.push(Value::Bool(false)); }
-                    } else { self.stack.push(Value::Bool(false)); }
-                } else { self.stack.push(Value::Bool(false)); }
+                            let res = Value::from_bool(true);
+                            unsafe { locals[dst as usize].dec_ref(); }
+                            locals[dst as usize] = res;
+                        } else { 
+                            unsafe { locals[dst as usize].dec_ref(); }
+                            locals[dst as usize] = Value::from_bool(false);
+                        }
+                    } else { 
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = Value::from_bool(false);
+                    }
+                } else { 
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = Value::from_bool(false);
+                }
             }
             MethodKind::Delete => {
-                let idx = if let Value::Int(i) = args[0] { i } else { -1 };
+                let idx = if args[0].is_int() { args[0].as_i64() } else { -1 };
                 drop(t);
                 if idx >= 0 {
                     let mut t_mut = t_rc.write();
                     if (idx as usize) < t_mut.rows.len() {
-                        t_mut.rows.remove(idx as usize);
-                        self.stack.push(Value::Bool(true));
-                    } else { self.stack.push(Value::Bool(false)); }
-                } else { self.stack.push(Value::Bool(false)); }
+                        let row = t_mut.rows.remove(idx as usize);
+                        for v in row { unsafe { v.dec_ref(); } }
+                        let res = Value::from_bool(true);
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = res;
+                    } else { 
+                        unsafe { locals[dst as usize].dec_ref(); }
+                        locals[dst as usize] = Value::from_bool(false);
+                    }
+                } else { 
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = Value::from_bool(false);
+                }
             }
             MethodKind::Where => {
-                let filter_func = if let Value::Function(f) = args[0] { f } else { return OpResult::Halt; };
+                if !args[0].is_ptr() || (args[0].0 & 0x000F_0000_0000_0000) != TAG_FUNC {
+                    eprintln!("R301: Table.where() requires a function. Got: {:x}{}", args[0].0, self.current_span_info(ip));
+                    return OpResult::Halt;
+                }
+                let filter_func = args[0].as_function();
                 let row_count = t.rows.len();
                 drop(t);
                 let mut filtered = Vec::new();
                 for i in 0..row_count {
-                    let mut run_args = vec![Value::Row(t_rc.clone(), i)];
-                    run_args.extend_from_slice(&args[1..]);
-                    if let Some(Value::Bool(true)) = self.run_frame(filter_func, &run_args) {
-                        filtered.push(t_rc.read().rows[i].clone());
+                    let row_ref = Arc::new(RowRef { table: t_rc.clone(), row_idx: i as u32 });
+                    let row_val = Value::from_row(row_ref);
+                    let mut run_args = vec![row_val];
+                    for a in &args[1..] { unsafe { a.inc_ref(); } run_args.push(*a); }
+                    if let Some(res) = self.run_frame(filter_func as usize, &run_args) {
+                        if res.is_bool() && res.as_bool() {
+                            let mut row_copy = Vec::new();
+                            for v in &t_rc.read().rows[i] { unsafe { v.inc_ref(); } row_copy.push(*v); }
+                            filtered.push(row_copy);
+                        }
+                        unsafe { res.dec_ref(); }
                     }
+                    unsafe { row_val.dec_ref(); }
+                    for a in run_args.into_iter().skip(1) { unsafe { a.dec_ref(); } }
                 }
-                self.stack.push(Value::Table(Arc::new(RwLock::new(
+                let res = Value::from_table(Arc::new(RwLock::new(
                     TableData { columns: t_rc.read().columns.clone(), rows: filtered }
-                ))));
+                )));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Get => {
-                let idx = if let Value::Int(i) = args[0] { i } else { -1 };
+                let idx = if args[0].is_int() { args[0].as_i64() } else { -1 };
                 if idx >= 0 && (idx as usize) < t.rows.len() {
-                    self.stack.push(Value::Row(t_rc.clone(), idx as usize));
+                    let res = Value::from_row(Arc::new(RowRef { table: t_rc.clone(), row_idx: idx as u32 }));
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
                 } else {
                     eprintln!("R303: Table.get index out of bounds: {}{}", idx, self.current_span_info(ip));
                     return OpResult::Halt;
@@ -2160,45 +3433,60 @@ impl Executor {
             }
             MethodKind::Join => {
                 if args.is_empty() { eprintln!("join: missing arguments{}", self.current_span_info(ip)); return OpResult::Halt; }
-                let right_rc = match args[0].clone() {
-                    Value::Table(r) => r,
-                    _ => { eprintln!("join: first argument must be a table{}", self.current_span_info(ip)); return OpResult::Halt; }
+                let right_rc = if args[0].is_ptr() && (args[0].0 & 0x000F_0000_0000_0000) == TAG_TBL {
+                    args[0].as_table()
+                } else {
+                    eprintln!("join: first argument must be a table{}", self.current_span_info(ip));
+                    return OpResult::Halt;
                 };
                 let pred = if args.len() >= 3 {
-                    match (args[1].clone(), args[2].clone()) {
-                        (Value::String(lk), Value::String(rk)) => JoinPred::Keys(lk, rk),
-                        _ => { eprintln!("join: key args must be strings{}", self.current_span_info(ip)); return OpResult::Halt; }
+                    if args[1].is_ptr() && (args[1].0 & 0x000F_0000_0000_0000) == TAG_STR &&
+                       args[2].is_ptr() && (args[2].0 & 0x000F_0000_0000_0000) == TAG_STR {
+                        JoinPred::Keys(args[1].as_string().to_string(), args[2].as_string().to_string())
+                    } else {
+                        eprintln!("join: key args must be strings{}", self.current_span_info(ip));
+                        return OpResult::Halt;
                     }
                 } else if args.len() == 2 {
-                    match args[1] {
-                        Value::Function(fid) => JoinPred::Lambda(fid),
-                        _ => { eprintln!("join: second arg must be a function{}", self.current_span_info(ip)); return OpResult::Halt; }
+                    if args[1].is_ptr() && (args[1].0 & 0x000F_0000_0000_0000) == TAG_FUNC {
+                        JoinPred::Lambda(args[1].as_function() as usize)
+                    } else {
+                        eprintln!("join: second arg must be a function{}", self.current_span_info(ip));
+                        return OpResult::Halt;
                     }
                 } else {
-                    eprintln!("join: requires 2 or 3 arguments{}", self.current_span_info(ip)); return OpResult::Halt;
+                    eprintln!("join: requires 2 or 3 arguments{}", self.current_span_info(ip));
+                    return OpResult::Halt;
                 };
-                let left_clone  = t.clone();
-                let right_clone = right_rc.read().clone();
+                let left_data  = t.clone();
+                let right_data = right_rc.read().clone();
                 drop(t);
-                let result = join_tables(&left_clone, &right_clone, &pred, "b", self);
-                self.stack.push(Value::Table(Arc::new(RwLock::new(result))));
+                let result = join_tables(&left_data, &right_data, &pred, "b", self);
+                let res = Value::from_table(Arc::new(RwLock::new(result)));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Clear => {
                 drop(t);
-                t_rc.write().rows.clear();
-                self.stack.push(Value::Bool(true));
+                let mut t_mut = t_rc.write();
+                for row in t_mut.rows.drain(..) { for v in row { unsafe { v.dec_ref(); } } }
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             _ => { eprintln!("Method {:?} not supported for Table{}", kind, self.current_span_info(ip)); return OpResult::Halt; }
         }
         OpResult::Continue
     }
 
-    fn handle_row_method(&mut self, t_rc: Arc<RwLock<TableData>>, row_idx: usize, kind: MethodKind, ip: usize) -> OpResult {
+    fn handle_row_method(&mut self, dst: u8, row_ref: Arc<RowRef>, kind: MethodKind, ip: usize, locals: &mut [Value]) -> OpResult {
         match kind {
             MethodKind::Show => {
-                let t = t_rc.read();
-                println!("{:?}", t.rows[row_idx]);
-                self.stack.push(Value::Bool(true));
+                let t = row_ref.table.read();
+                println!("{:?}", t.rows[row_ref.row_idx as usize]);
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             _ => {
                 eprintln!("Method {:?} not supported for Row{}", kind, self.current_span_info(ip));
@@ -2208,60 +3496,103 @@ impl Executor {
         OpResult::Continue
     }
 
-    fn handle_row_custom(&mut self, t_rc: Arc<RwLock<TableData>>, row_idx: usize, method_name: &str, ip: usize) -> OpResult {
-        let t = t_rc.read();
+    fn handle_row_custom(&mut self, dst: u8, row_ref: Arc<RowRef>, method_name: &str, ip: usize, locals: &mut [Value]) -> OpResult {
+        let t = row_ref.table.read();
         if let Some(col_idx) = t.columns.iter().position(|c| c.name == method_name) {
-            self.stack.push(t.rows[row_idx][col_idx].clone());
+            let v = t.rows[row_ref.row_idx as usize][col_idx];
+            unsafe { v.inc_ref(); }
+            unsafe { locals[dst as usize].dec_ref(); }
+            locals[dst as usize] = v;
         } else {
             match method_name {
-                "show" => { println!("{:?}", t.rows[row_idx]); self.stack.push(Value::Bool(true)); }
+                "show" => {
+                    let row_val = Value::from_row(row_ref.clone());
+                    println!("{}", row_val.to_string());
+                    unsafe { row_val.dec_ref(); }
+                    let res = Value::from_bool(true);
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = res;
+                }
                 _ => { eprintln!("Unknown Row member: {}{}", method_name, self.current_span_info(ip)); return OpResult::Halt; }
             }
         }
         OpResult::Continue
     }
 
-    fn handle_date_method(&mut self, d: chrono::NaiveDateTime, kind: MethodKind, args: Vec<Value>, ip: usize) -> OpResult {
+    fn handle_date_method(&mut self, dst: u8, d: chrono::NaiveDateTime, kind: MethodKind, args: &[Value], ip: usize, locals: &mut [Value]) -> OpResult {
         use chrono::Datelike;
         use chrono::Timelike;
         match kind {
-            MethodKind::Year   => self.stack.push(Value::Int(d.year() as i64)),
-            MethodKind::Month  => self.stack.push(Value::Int(d.month() as i64)),
-            MethodKind::Day    => self.stack.push(Value::Int(d.day() as i64)),
-            MethodKind::Hour   => self.stack.push(Value::Int(d.hour() as i64)),
-            MethodKind::Minute => self.stack.push(Value::Int(d.minute() as i64)),
-            MethodKind::Second => self.stack.push(Value::Int(d.second() as i64)),
+            MethodKind::Year   => {
+                let res = Value::from_i64(d.year() as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Month  => {
+                let res = Value::from_i64(d.month() as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Day    => {
+                let res = Value::from_i64(d.day() as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Hour   => {
+                let res = Value::from_i64(d.hour() as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Minute => {
+                let res = Value::from_i64(d.minute() as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
+            MethodKind::Second => {
+                let res = Value::from_i64(d.second() as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
             MethodKind::Format => {
-                let fmt_str = if let Some(Value::String(s)) = args.first() {
-                    s.replace("YYYY", "%Y").replace("MM", "%m").replace("DD", "%d")
-                     .replace("HH", "%H").replace("mm", "%M").replace("ss", "%S")
+                let fmt_str = if let Some(v) = args.first() {
+                    if v.is_ptr() && (v.0 & 0x000F_0000_0000_0000) == TAG_STR {
+                        v.as_string().replace("YYYY", "%Y").replace("MM", "%m").replace("DD", "%d")
+                            .replace("HH", "%H").replace("mm", "%M").replace("ss", "%S")
+                            .replace("SSS", "%3f").replace("ms", "%3f")
+                    } else { "%Y-%m-%d %H:%M:%S".to_string() }
                 } else {
                     "%Y-%m-%d %H:%M:%S".to_string()
                 };
-                self.stack.push(Value::String(d.format(&fmt_str).to_string()));
+                let res = Value::from_string(Arc::new(d.format(&fmt_str).to_string()));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             _ => { eprintln!("Method {:?} not supported for Date{}", kind, self.current_span_info(ip)); return OpResult::Halt; }
         }
         OpResult::Continue
     }
 
-    // ── FIX: dynamic JSON field access ────────────────────────────────────────
-    fn handle_json_method(&mut self, j_rc: Arc<RwLock<serde_json::Value>>, kind: MethodKind, args: Vec<Value>, ip: usize) -> OpResult {
+    fn handle_json_method(&mut self, dst: u8, j_rc: Arc<RwLock<serde_json::Value>>, kind: MethodKind, args: &[Value], ip: usize, locals: &mut [Value]) -> OpResult {
         let mut j_mut = j_rc.write();
         match kind {
             MethodKind::Set | MethodKind::Insert => {
                 if args.len() >= 2 {
-                    if let Value::String(path) = &args[0] {
+                    if args[0].is_ptr() && (args[0].0 & 0x000F_0000_0000_0000) == TAG_STR {
+                        let path = args[0].as_string();
                         let val = value_to_json(&args[1]);
-                        set_json_value_at_path(&mut j_mut, path, val);
+                        set_json_value_at_path(&mut j_mut, &path, val);
                     }
                 }
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Push | MethodKind::Append => {
                 if args.len() >= 2 {
-                    if let Value::String(path) = &args[0] {
+                    if args[0].is_ptr() && (args[0].0 & 0x000F_0000_0000_0000) == TAG_STR {
+                        let path = args[0].as_string();
                         let val = value_to_json(&args[1]);
-                        let pp = normalize_json_path(path);
+                        let pp = normalize_json_path(&path);
                         if let Some(target) = j_mut.pointer_mut(&pp) {
                             if let Some(arr) = target.as_array_mut() {
                                 arr.push(val);
@@ -2269,51 +3600,73 @@ impl Executor {
                         }
                     }
                 }
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Count | MethodKind::Len | MethodKind::Size => {
                 let n = j_mut.as_array().map(|a| a.len())
                     .or_else(|| j_mut.as_object().map(|o| o.len()))
                     .unwrap_or(0);
-                self.stack.push(Value::Int(n as i64));
+                let res = Value::from_i64(n as i64);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Exists => {
-                if let Value::String(path) = &args[0] {
-                    let pp = normalize_json_path(path);
-                    let found = j_mut.pointer(&pp).map(|v| !v.is_null()).unwrap_or(false);
-                    self.stack.push(Value::Bool(found));
-                } else { self.stack.push(Value::Bool(false)); }
+                let found = if args[0].is_ptr() && (args[0].0 & 0x000F_0000_0000_0000) == TAG_STR {
+                    let path = args[0].as_string();
+                    let pp = normalize_json_path(&path);
+                    j_mut.pointer(&pp).map(|v| !v.is_null()).unwrap_or(false)
+                } else { false };
+                let res = Value::from_bool(found);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Get => {
                 let path_storage;
-                let path = if let Value::String(s) = &args[0] {
-                    s.as_str()
-                } else if let Value::Int(i) = &args[0] {
-                    path_storage = format!("/{}", i);
-                    &path_storage
+                let path = if args[0].is_ptr() && (args[0].0 & 0x000F_0000_0000_0000) == TAG_STR {
+                    let s = args[0].as_string();
+                    (*s).clone()
+                } else if args[0].is_int() {
+                    path_storage = format!("/{}", args[0].as_i64());
+                    path_storage.clone()
                 } else {
-                    ""
+                    "".to_string()
                 };
-                let pp = normalize_json_path(path);
-                if let Some(v) = j_mut.pointer(&pp) {
-                    self.stack.push(json_serde_to_value(v));
-                } else { self.stack.push(Value::Bool(false)); }
+                let pp = normalize_json_path(&path);
+                let res = if let Some(v) = j_mut.pointer(&pp) {
+                    json_serde_to_value(v)
+                } else { Value::from_bool(false) };
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Inject => {
-                if args.len() == 2 {
-                    if let (Value::Map(m), Value::Table(t)) = (&args[0], &args[1]) {
-                        inject_json_into_table(&mut t.write(), &j_mut, &m.read());
-                        self.stack.push(Value::Bool(true));
-                    } else { self.stack.push(Value::Bool(false)); }
+                let ok = if args.len() == 2 {
+                    if args[0].is_ptr() && (args[0].0 & 0x000F_0000_0000_0000) == TAG_MAP &&
+                       args[1].is_ptr() && (args[1].0 & 0x000F_0000_0000_0000) == TAG_TBL {
+                        inject_json_into_table(&mut args[1].as_table().write(), &j_mut, &args[0].as_map().read());
+                        true
+                    } else { false }
                 } else if args.len() == 3 {
-                    if let (Value::String(key), Value::Map(m), Value::Table(t)) = (&args[0], &args[1], &args[2]) {
-                        let pp = normalize_json_path(key);
+                    if args[0].is_ptr() && (args[0].0 & 0x000F_0000_0000_0000) == TAG_STR &&
+                       args[1].is_ptr() && (args[1].0 & 0x000F_0000_0000_0000) == TAG_MAP &&
+                       args[2].is_ptr() && (args[2].0 & 0x000F_0000_0000_0000) == TAG_TBL {
+                        let key = args[0].as_string();
+                        let pp = normalize_json_path(&key);
                         let sub_json = j_mut.pointer(&pp).unwrap_or(&serde_json::Value::Null);
-                        inject_json_into_table(&mut t.write(), sub_json, &m.read());
-                        self.stack.push(Value::Bool(true));
-                    } else { self.stack.push(Value::Bool(false)); }
-                } else { self.stack.push(Value::Bool(false)); }
+                        inject_json_into_table(&mut args[2].as_table().write(), sub_json, &args[1].as_map().read());
+                        true
+                    } else { false }
+                } else { false };
+                let res = Value::from_bool(ok);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
-            MethodKind::ToStr => self.stack.push(Value::String(j_mut.to_string())),
+            MethodKind::ToStr => {
+                let res = Value::from_string(Arc::new(j_mut.to_string()));
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
+            }
             _ => {
                 eprintln!("Method {:?} not supported for JSON{}", kind, self.current_span_info(ip));
                 return OpResult::Halt;
@@ -2322,133 +3675,65 @@ impl Executor {
         OpResult::Continue
     }
 
-    fn handle_json_custom(&mut self, j_rc: Arc<RwLock<serde_json::Value>>, field_name: &str, _args: Vec<Value>, _ip: usize) -> OpResult {
-        let j_mut = j_rc.write();
-        // First try as object key
-        if let Some(v) = j_mut.get(field_name) {
-            self.stack.push(json_serde_to_value(v));
-        }
-        // Then try array index if field_name is a number
-        else if let Ok(idx) = field_name.parse::<usize>() {
-            if let Some(v) = j_mut.get(idx) {
-                self.stack.push(json_serde_to_value(v));
-            } else {
-                self.stack.push(Value::Bool(false));
-            }
-        }
-        else {
-            // Field not found — push false
-            self.stack.push(Value::Bool(false));
-        }
+    fn handle_json_custom(&mut self, dst: u8, j_rc: Arc<RwLock<serde_json::Value>>, field_name: &str, _args: &[Value], _ip: usize, locals: &mut [Value]) -> OpResult {
+        let j = j_rc.read();
+        let pp = normalize_json_path(field_name);
+        let res = if let Some(v) = j.pointer(&pp) {
+            json_serde_to_value(v)
+        } else {
+            Value::from_bool(false)
+        };
+        unsafe { locals[dst as usize].dec_ref(); }
+        locals[dst as usize] = res;
         OpResult::Continue
     }
 
-    fn handle_fiber_method(&mut self, fiber_rc: Arc<RwLock<FiberState>>, kind: MethodKind, ip: usize) -> OpResult {
+    fn handle_fiber_method(&mut self, dst: u8, fiber_rc: Arc<RwLock<FiberState>>, kind: MethodKind, ip: usize, locals: &mut [Value]) -> OpResult {
         match kind {
             MethodKind::Next => {
                 let cached = fiber_rc.write().yielded_value.take();
-                if let Some(val) = cached {
-                    self.stack.push(val);
+                let res = if let Some(val) = cached {
+                    val
                 } else if fiber_rc.read().is_done {
-                    self.stack.push(Value::Bool(false));
+                    Value::from_bool(false)
                 } else {
-                    let res = self.resume_fiber(fiber_rc.clone(), true);
-                    self.stack.push(res.unwrap_or(Value::Bool(false)));
-                }
+                    self.resume_fiber(fiber_rc.clone(), true).unwrap_or(Value::from_bool(false))
+                };
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Run => {
                 if !fiber_rc.read().is_done {
                     let cached = fiber_rc.write().yielded_value.take();
                     if cached.is_none() { self.resume_fiber(fiber_rc, false); }
                 }
-                self.stack.push(Value::Bool(true));
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::IsDone => {
-                if fiber_rc.read().yielded_value.is_some() {
-                    self.stack.push(Value::Bool(false));
-                } else if fiber_rc.read().is_done {
-                    self.stack.push(Value::Bool(true));
+                let f = fiber_rc.read();
+                let res_bool = if f.yielded_value.is_some() {
+                    false
                 } else {
-                    let res = self.resume_fiber(fiber_rc.clone(), true);
-                    if self.fiber_yielded {
-                        fiber_rc.write().yielded_value = Some(res.unwrap_or(Value::Bool(false)));
-                        self.stack.push(Value::Bool(false));
-                    } else {
-                        fiber_rc.write().yielded_value = Some(res.unwrap_or(Value::Bool(false)));
-                        self.stack.push(Value::Bool(true));
-                    }
-                }
+                    f.is_done
+                };
+
+                let res = Value::from_bool(res_bool);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             MethodKind::Close => {
                 fiber_rc.write().is_done = true;
-                self.stack.push(Value::Bool(true));
+                let res = Value::from_bool(true);
+                unsafe { locals[dst as usize].dec_ref(); }
+                locals[dst as usize] = res;
             }
             _ => { eprintln!("Method {:?} not supported for Fiber{}", kind, self.current_span_info(ip)); return OpResult::Halt; }
         }
         OpResult::Continue
     }
 
-    // ── shared HTTP response builder ──────────────────────────────────────────────
-
-    fn send_tiny_http_response(&mut self, request: tiny_http::Request, resp_json_rc: Arc<RwLock<serde_json::Value>>) {
-        let resp_json = resp_json_rc.read();
-        let (status, body_val, headers_val) = if let serde_json::Value::Object(m) = &*resp_json {
-            let s = m.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u32;
-            let b = m.get("body").cloned().unwrap_or(serde_json::Value::Null);
-            let h = m.get("headers").cloned();
-            (s, b, h)
-        } else {
-            (200, (*resp_json).clone(), None)
-        };
-
-
-        let body_str = match body_val {
-            serde_json::Value::String(s) => s,
-            other => other.to_string(),
-        };
-
-        let mut response = tiny_http::Response::from_string(body_str)
-            .with_status_code(status);
-
-        // Content-Type defaults to application/json but can be overridden
-        let mut ct_set = false;
-        if let Some(serde_json::Value::Object(h_map)) = headers_val {
-            for (k, v) in h_map {
-                let v_str = match v {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                };
-                if k.to_lowercase() == "content-type" { ct_set = true; }
-                if let Ok(h) = tiny_http::Header::from_bytes(k.as_bytes(), v_str.as_bytes()) {
-                    response = response.with_header(h);
-                }
-            }
-        }
-        if !ct_set {
-            response = response.with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-        }
-
-        // Add standard CORS headers if not already set
-        let has_header = |name: &str| -> bool {
-            resp_json.as_object()
-                .and_then(|m| m.get("headers"))
-                .and_then(|h| h.as_object())
-                .map(|h| h.keys().any(|k| k.to_lowercase() == name.to_lowercase()))
-                .unwrap_or(false)
-        };
-
-        if !has_header("Access-Control-Allow-Origin") {
-            response = response.with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-        }
-        if !has_header("Access-Control-Allow-Methods") {
-            response = response.with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, PUT, DELETE, OPTIONS"[..]).unwrap());
-        }
-        if !has_header("Access-Control-Allow-Headers") {
-            response = response.with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, Authorization"[..]).unwrap());
-        }
-
-        let _ = request.respond(response);
-    }
 }
 
 fn build_response_json(result: Result<ureq::Response, ureq::Error>) -> serde_json::Value {
@@ -2488,99 +3773,24 @@ fn build_response_json(result: Result<ureq::Response, ureq::Error>) -> serde_jso
     }
 }
 
-/// Convert a serde_json::Value to a VM Value — preserving nested JSON objects.
 fn json_serde_to_value(v: &serde_json::Value) -> Value {
     match v {
-        serde_json::Value::Null    => Value::Bool(false),
-        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Null    => Value::from_bool(false),
+        serde_json::Value::Bool(b) => Value::from_bool(*b),
         serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() { Value::Int(i) }
-            else if let Some(f) = n.as_f64() { Value::Float(f) }
-            else { Value::Int(0) }
+            if let Some(i) = n.as_i64() { Value::from_i64(i) }
+            else if let Some(f) = n.as_f64() { Value::from_f64(f) }
+            else { Value::from_i64(0) }
         }
-        serde_json::Value::String(s) => Value::String(s.clone()),
-        // Arrays and objects stay as Json for further dot-access
-        other => Value::Json(Arc::new(RwLock::new(other.clone()))),
+        serde_json::Value::String(s) => Value::from_string(Arc::new(s.clone())),
+        serde_json::Value::Array(arr) => {
+            let elements: Vec<Value> = arr.iter().map(|e| json_serde_to_value(e)).collect();
+            Value::from_array(Arc::new(RwLock::new(elements)))
+        }
+        serde_json::Value::Object(_) => {
+            Value::from_json(Arc::new(RwLock::new(v.clone())))
+        }
     }
-}
-
-fn json_value_to_typed_value_raw(v: &Value, target: &Value) -> Value {
-    // If we have a Json wrapper, unwrap it first for the logic below
-    let inner_json = if let Value::Json(j) = v {
-        Some(j.read().clone())
-    } else {
-        None
-    };
-
-    match target {
-        Value::Int(_) => {
-            match v {
-                Value::Int(i) => Value::Int(*i),
-                Value::Float(f) => Value::Int(*f as i64),
-                Value::String(s) => s.parse::<i64>().map(Value::Int).unwrap_or(Value::Int(0)),
-                Value::Json(_) => {
-                    let j = inner_json.unwrap();
-                    if let Some(i) = j.as_i64() { Value::Int(i) }
-                    else if let Some(f) = j.as_f64() { Value::Int(f as i64) }
-                    else { Value::Int(0) }
-                }
-                _ => Value::Int(0),
-            }
-        }
-        Value::Float(_) => {
-            match v {
-                Value::Float(f) => Value::Float(*f),
-                Value::Int(i) => Value::Float(*i as f64),
-                Value::String(s) => s.parse::<f64>().map(Value::Float).unwrap_or(Value::Float(0.0)),
-                Value::Json(_) => {
-                    let j = inner_json.unwrap();
-                    if let Some(f) = j.as_f64() { Value::Float(f) }
-                    else if let Some(i) = j.as_i64() { Value::Float(i as f64) }
-                    else { Value::Float(0.0) }
-                }
-                _ => Value::Float(0.0),
-            }
-        }
-        Value::Array(_) => {
-            if let Some(j) = inner_json {
-                if let Some(arr) = j.as_array() {
-                    let mut vec = Vec::with_capacity(arr.len());
-                    for item in arr {
-                        vec.push(json_serde_to_value(item));
-                    }
-                    return Value::Array(Arc::new(RwLock::new(vec)));
-                }
-            }
-            v.clone()
-        }
-        Value::String(_) => {
-             match v {
-                 Value::String(s) => Value::String(s.clone()),
-                 Value::Int(i) => Value::String(i.to_string()),
-                 Value::Float(f) => Value::String(f.to_string()),
-                 Value::Bool(b) => Value::String(b.to_string()),
-                 Value::Json(j) => Value::String(j.read().to_string()),
-                 _ => Value::String("".to_string()),
-             }
-        }
-        Value::Bool(_) => {
-            match v {
-                Value::Bool(b) => Value::Bool(*b),
-                Value::Int(i) => Value::Bool(*i != 0),
-                Value::Json(j) => Value::Bool(j.read().as_bool().unwrap_or(false)),
-                _ => Value::Bool(false),
-            }
-        }
-        _ => v.clone(),
-    }
-}
-
-// ── public helpers ────────────────────────────────────────────────────────────
-
-pub fn is_safe_path(path_str: &str) -> bool {
-    let path = std::path::Path::new(path_str);
-    if path.is_absolute() { return false; }
-    path.components().all(|c| !matches!(c, std::path::Component::ParentDir))
 }
 
 pub fn normalize_json_path(path: &str) -> String {
@@ -2593,16 +3803,13 @@ pub fn normalize_json_path(path: &str) -> String {
 fn set_json_value_at_path(target: &mut serde_json::Value, path: &str, value: serde_json::Value) {
     let pointer = normalize_json_path(path);
     let parts: Vec<&str> = pointer.split('/').filter(|s| !s.is_empty()).collect();
-    
     if parts.is_empty() {
         *target = value;
         return;
     }
-
     let mut current = target;
     for (i, part) in parts.iter().enumerate() {
         let is_last = i == parts.len() - 1;
-        
         if let Ok(idx) = part.parse::<usize>() {
             if !current.is_array() {
                 *current = serde_json::Value::Array(Vec::new());
@@ -2625,14 +3832,11 @@ fn set_json_value_at_path(target: &mut serde_json::Value, path: &str, value: ser
                 obj.insert(part.to_string(), value);
                 return;
             }
-            
-            // Peek next part to see if we should create an array or object for missing path
             let next_is_array = if i + 1 < parts.len() {
                 parts[i+1].parse::<usize>().is_ok()
             } else {
                 false
             };
-
             current = obj.entry(part.to_string()).or_insert_with(|| {
                 if next_is_array {
                     serde_json::Value::Array(Vec::new())
@@ -2645,92 +3849,79 @@ fn set_json_value_at_path(target: &mut serde_json::Value, path: &str, value: ser
 }
 
 pub fn value_to_json(v: &Value) -> serde_json::Value {
-    match v {
-        Value::Int(i)    => serde_json::Value::Number((*i).into()),
-        Value::Float(f)  => serde_json::Number::from_f64(*f).map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null),
-        Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Bool(b)   => serde_json::Value::Bool(*b),
-        Value::Array(arr) => {
-            let a = arr.read();
+    if v.is_int() { return serde_json::Value::Number(v.as_i64().into()); }
+    if v.is_float() { return serde_json::Number::from_f64(v.as_f64()).map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null); }
+    if v.is_bool() { return serde_json::Value::Bool(v.as_bool()); }
+    if !v.is_ptr() { return serde_json::Value::Null; }
+    
+    let tag = v.0 & 0x000F_0000_0000_0000;
+    match tag {
+        TAG_STR => serde_json::Value::String(v.as_string().to_string()),
+        TAG_ARR => {
+            let a_rc = v.as_array();
+            let a = a_rc.read();
             serde_json::Value::Array(a.iter().map(value_to_json).collect())
         }
-        Value::Map(m) => {
-            let b = m.read();
+        TAG_MAP => {
+            let b_rc = v.as_map();
+            let b = b_rc.read();
             let mut obj = serde_json::Map::new();
-            for (k, v) in b.iter() { obj.insert(k.to_string(), value_to_json(v)); }
+            for (k, val) in b.iter() { obj.insert(k.to_string(), value_to_json(val)); }
             serde_json::Value::Object(obj)
         }
-        Value::Json(j)  => j.read().clone(),
-        Value::Date(d)  => serde_json::Value::String(d.format("%Y-%m-%d").to_string()),
-        _               => serde_json::Value::Null,
+        TAG_JSON => v.as_json().read().clone(),
+        TAG_DATE => {
+            let ts = v.as_date();
+            let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap().with_timezone(&chrono::Local).naive_local();
+            serde_json::Value::String(dt.format("%Y-%m-%d").to_string())
+        },
+        _ => serde_json::Value::Null,
     }
 }
 
 
-/// Decode percent-encoded URL components (%20 → space, %2F → /, etc.)
-fn url_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(h), Some(l)) = (hex_digit(bytes[i+1]), hex_digit(bytes[i+2])) {
-                out.push(char::from(h * 16 + l));
-                i += 3;
-                continue;
-            }
-        }
-        if bytes[i] == b'+' { out.push(' '); } else { out.push(char::from(bytes[i])); }
-        i += 1;
-    }
-    out
-}
-
-fn hex_digit(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
-}
 
 pub fn is_safe_url(url_str: &str) -> Result<(), String> {
     if url_str.starts_with("file://") {
         return Err("HALT.FATAL: SSRF - file:// URLs are forbidden".to_string());
     }
-    
-    // Basic host extraction for SSRF checks
     let host = if let Some(start) = url_str.find("://") {
         let remainder = &url_str[start+3..];
         let end = remainder.find('/').unwrap_or(remainder.len());
         let mut host_port = &remainder[..end];
-        if let Some(p) = host_port.find('@') { host_port = &host_port[p+1..]; } // strip user:pass
-        if let Some(p) = host_port.find(':') { host_port = &host_port[..p]; } // strip port
+        if let Some(p) = host_port.find('@') { host_port = &host_port[p+1..]; }
+        if let Some(p) = host_port.find(':') { host_port = &host_port[..p]; }
         host_port.to_lowercase()
     } else {
         url_str.to_lowercase()
     };
-
     if host == "169.254.169.254" || host.starts_with("169.254.") {
         return Err("HALT.FATAL: SSRF - Link-local addresses are forbidden".to_string());
     }
-
     let is_localhost = host == "localhost" || host == "127.0.0.1" || host == "::1";
-
     if !is_localhost {
-        if host.starts_with("10.") || 
-           host.starts_with("192.168.") ||
-           host.starts_with("172.16.") || host.starts_with("172.17.") ||
-           host.starts_with("172.18.") || host.starts_with("172.19.") ||
-           host.starts_with("172.20.") || host.starts_with("172.21.") ||
-           host.starts_with("172.22.") || host.starts_with("172.23.") ||
-           host.starts_with("172.24.") || host.starts_with("172.25.") ||
-           host.starts_with("172.26.") || host.starts_with("172.27.") ||
-           host.starts_with("172.28.") || host.starts_with("172.29.") ||
-           host.starts_with("172.30.") || host.starts_with("172.31.") {
+        if host.starts_with("10.") ||
+            host.starts_with("192.168.") ||
+            host.starts_with("172.16.") || host.starts_with("172.17.") ||
+            host.starts_with("172.18.") || host.starts_with("172.19.") ||
+            host.starts_with("172.20.") || host.starts_with("172.21.") ||
+            host.starts_with("172.22.") || host.starts_with("172.23.") ||
+            host.starts_with("172.24.") || host.starts_with("172.25.") ||
+            host.starts_with("172.26.") || host.starts_with("172.27.") ||
+            host.starts_with("172.28.") || host.starts_with("172.29.") ||
+            host.starts_with("172.30.") || host.starts_with("172.31.") {
             return Err("HALT.ERROR: SSRF - Private IP ranges are blocked in production".to_string());
         }
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_value_size() {
+        println!("Value size: {}", std::mem::size_of::<Value>());
+        assert!(std::mem::size_of::<Value>() <= 24);
+    }   
+}            

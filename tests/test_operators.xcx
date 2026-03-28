@@ -1,0 +1,71 @@
+--- test_operators.xcx
+--- Arithmetic, Logical, Comparison, Set, String
+
+>! "Running test_operators.xcx...";
+
+--- Arithmetic
+if (10 + 3 != 13) then; halt.error >! "Addition failed"; end;
+if (10 - 3 != 7) then; halt.error >! "Subtraction failed"; end;
+if (10 * 3 != 30) then; halt.error >! "Multiplication failed"; end;
+if (10 / 3 != 3) then; halt.error >! "Integer division failed"; end;
+if (10 % 3 != 1) then; halt.error >! "Modulo failed"; end;
+if (2 ^ 10 != 1024) then; halt.error >! "Exponentiation failed"; end;
+if (48 ++ 77 != 4877) then; halt.error >! "Concatenation failed"; end;
+
+--- String
+if ("Hi " + "User" != "Hi User") then; halt.error >! "String concatenation failed"; end;
+if (NOT ("Search" HAS "ear")) then; halt.error >! "String HAS failed"; end;
+if ("Value: " + 42 != "Value: 42") then; halt.error >! "Auto-string conversion failed"; end;
+
+--- Logical Aliases
+b: t_val = true;
+b: f_val = false;
+
+--- AND / &&
+if (NOT (t_val AND t_val)) then; halt.error >! "AND failed"; end;
+if (t_val && f_val) then; halt.error >! "&& failed"; end;
+
+--- OR / ||
+if (NOT (t_val OR f_val)) then; halt.error >! "OR failed"; end;
+if (NOT (f_val || t_val)) then; halt.error >! "|| failed"; end;
+
+--- NOT / !!
+if (NOT t_val) then; halt.error >! "NOT failed"; end;
+if (!!t_val != false) then; halt.error >! "!! failure: expected single-negation alias"; end;
+
+
+
+
+--- Comparison
+if (5 == 5 != true) then; halt.error >! "== failed"; end;
+if (5 != 10 != true) then; halt.error >! "!= failed"; end;
+if (5 < 10 != true) then; halt.error >! "< failed"; end;
+if (10 > 5 != true) then; halt.error >! "> failed"; end;
+if (5 <= 5 != true) then; halt.error >! "<= failed"; end;
+if (10 >= 10 != true) then; halt.error >! ">= failed"; end;
+
+--- Set Operations and Aliases
+set:N: sA {1, 2, 3};
+set:N: sB {3, 4, 5};
+
+--- UNION / ∪
+set:N: u1 = sA UNION sB;
+set:N: u2 = sA ∪ sB;
+if (u1.size() != 5 OR u2.size() != 5) then; halt.error >! "Union failed"; end;
+
+--- INTERSECTION / ∩
+set:N: i1 = sA INTERSECTION sB;
+set:N: i2 = sA ∩ sB;
+if (i1.size() != 1 OR i2.size() != 1) then; halt.error >! "Intersection failed"; end;
+
+--- DIFFERENCE / \
+set:N: d1 = sA DIFFERENCE sB;
+set:N: d2 = sA \ sB;
+if (d1.size() != 2 OR d2.size() != 2) then; halt.error >! "Difference failed"; end;
+
+--- SYMMETRIC_DIFFERENCE / ⊕
+set:N: sd1 = sA SYMMETRIC_DIFFERENCE sB;
+set:N: sd2 = sA ⊕ sB;
+if (sd1.size() != 4 OR sd2.size() != 4) then; halt.error >! "Symmetric Difference failed"; end;
+
+>! "test_operators.xcx passed.";

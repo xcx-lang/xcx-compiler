@@ -1,0 +1,79 @@
+--- test_fibers.xcx
+--- Typed/Void, yield, next/run, checkDone, close, yield from
+
+>! "Running test_fibers.xcx...";
+
+--- 1. Typed Fiber
+fiber gen_nums(i: m_limit -> i) {
+    for i_lim in 1 to m_limit do;
+        yield i_lim;
+    end;
+    return 0;
+};
+
+fiber:i: f1 = gen_nums(3);
+if (f1.next() != 1 OR f1.next() != 2 OR f1.next() != 3) then; 
+    halt.error >! "Typed fiber next failed";
+end;
+if (f1.next() != 0 OR NOT f1.isDone()) then; 
+    halt.error >! "Typed fiber completion failed";
+end;
+
+--- 2. Void Fiber
+fiber logger_test(s: m_log) {
+    if (m_log == "") then; return; end;
+    yield;
+};
+
+fiber: f2 = logger_test("hello");
+if (f2.run() != true) then; 
+    halt.error >! "Void fiber run failed";
+end;
+if (f2.isDone()) then; 
+    halt.error >! "Void fiber isDone (pre) failed"; 
+end;
+
+f2.run();
+if (NOT f2.isDone()) then; 
+    halt.error >! "Void fiber isDone (post) failed";
+end;
+
+--- 3. Close
+fiber:i: f3 = gen_nums(10);
+i: f1_val = f3.next();
+f3.close();
+if (NOT f3.isDone()) then; 
+    halt.error >! "Fiber close failed";
+end;
+
+--- 4. For loop over fiber
+fiber:i: f4 = gen_nums(5);
+i: sum_f = 0;
+for val_f in f4 do;
+    sum_f = sum_f + val_f;
+end;
+if (sum_f != 15) then; 
+    halt.error >! "For loop over fiber failed";
+end;
+
+--- 5. Yield from (Delegation)
+fiber count_to(i: n_cnt -> i) {
+    for i_sub in 1 to n_cnt do;
+        yield i_sub;
+    end;
+    return 0;
+};
+
+fiber delegator_test(-> i) {
+    fiber:i: sub_f = count_to(3);
+    yield from sub_f;
+    yield 100;
+    return 0;
+};
+
+fiber:i: f5 = delegator_test();
+if (f5.next() != 1 OR f5.next() != 2 OR f5.next() != 3 OR f5.next() != 100) then;
+    halt.error >! "Yield from failed";
+end;
+
+>! "test_fibers.xcx passed.";

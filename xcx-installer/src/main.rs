@@ -10,11 +10,11 @@ use std::fs;
 const XCX_EXE: &[u8] = include_bytes!("../../target/release/xcx-compiler.exe");
 const PAX_XCX: &[u8] = include_bytes!("../../lib/pax.xcx");
 const MATH_XCX: &[u8] = include_bytes!("../../lib/math.xcx");
-const XCX_ICON: &[u8] = include_bytes!("../../XCX_Ecosystem_v2.1.0/icons/xcx.ico");
-const PAX_ICON: &[u8] = include_bytes!("../../XCX_Ecosystem_v2.1.0/icons/pax.ico");
+const XCX_ICON: &[u8] = include_bytes!("../../XCX_Ecosystem_v2.2.0/icons/xcx.ico");
+const PAX_ICON: &[u8] = include_bytes!("../../XCX_Ecosystem_v2.2.0/icons/pax.ico");
 const UNINSTALLER_EXE: &[u8] = include_bytes!("../target/release/xcx-uninstall.exe");
-const LICENSE_TXT: &[u8] = include_bytes!("../../XCX_Ecosystem_v2.1.0/LICENSE.txt");
-const README_TXT: &[u8] = include_bytes!("../../XCX_Ecosystem_v2.1.0/README.txt");
+const LICENSE_TXT: &[u8] = include_bytes!("../../XCX_Ecosystem_v2.2.0/LICENSE.txt");
+const README_TXT: &[u8] = include_bytes!("../../XCX_Ecosystem_v2.2.0/README.txt");
 
 // ── Kolory ────────────────────────────────────────────────────────────────────
 const C_BG:        egui::Color32 = egui::Color32::from_rgb(15,  15,  15);
@@ -184,7 +184,7 @@ fn register_uninstaller(install_dir: &Path) -> Result<(), String> {
     let uninstall_exe = install_dir.join("uninstall.exe");
     key.set_value("DisplayName",    &"XCX Compiler Ecosystem").ok();
     key.set_value("UninstallString",&format!("\"{}\"", uninstall_exe.to_str().unwrap_or(""))).ok();
-    key.set_value("DisplayVersion", &"2.1.0").ok();
+    key.set_value("DisplayVersion", &"2.2.0").ok();
     key.set_value("Publisher",      &"XCX Team").ok();
     key.set_value("DisplayIcon",    &install_dir.join("xcx.ico").to_str().unwrap_or("")).ok();
     Ok(())
@@ -299,7 +299,7 @@ fn draw_sidebar(ui: &mut egui::Ui, current_step: usize) {
     y += 16.0;
     let ver_rect = egui::Rect::from_min_size(egui::pos2(x0, y), egui::vec2(38.0, 14.0));
     p.rect_filled(ver_rect, egui::Rounding::same(3.0), egui::Color32::from_rgb(35, 10, 10));
-    p.text(ver_rect.center(), egui::Align2::CENTER_CENTER, "v2.1.0", font_ver, C_RED);
+    p.text(ver_rect.center(), egui::Align2::CENTER_CENTER, "v2.2.0", font_ver, C_RED);
     y += 24.0;
 
     // Separator
@@ -693,7 +693,7 @@ fn screen_terms(ui: &mut egui::Ui, accepted: &mut bool) {
                     ui.add_space(10.0);
                     ui.horizontal(|ui: &mut egui::Ui| {
                         ui.add_space(10.0);
-                        ui.label(egui::RichText::new(include_str!("../../XCX_Ecosystem_v2.1.0/LICENSE.txt")).color(C_WHITE).size(11.0).monospace());
+                        ui.label(egui::RichText::new(include_str!("../../XCX_Ecosystem_v2.2.0/LICENSE.txt")).color(C_WHITE).size(11.0).monospace());
                     });
                     ui.add_space(10.0);
                 });

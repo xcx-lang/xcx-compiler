@@ -18,7 +18,7 @@ const C_MUTED:   egui::Color32 = egui::Color32::from_rgb(130, 130, 130);
 const C_MUTED2:  egui::Color32 = egui::Color32::from_rgb(80,  80,  80);
 const C_GREEN:   egui::Color32 = egui::Color32::from_rgb(60,  200, 100);
 
-const XCX_ICON: &[u8] = include_bytes!("../../XCX_Ecosystem_v2.1.0/icons/xcx.ico");
+const XCX_ICON: &[u8] = include_bytes!("../../XCX_Ecosystem_v2.2.0/icons/xcx.ico");
 
 #[derive(PartialEq, Clone)]
 enum Screen {
@@ -176,7 +176,7 @@ impl eframe::App for XcxUninstaller {
                 let ver_rect = egui::Rect::from_min_size(egui::pos2(x0, y), egui::vec2(38.0, 14.0));
                 p.rect_filled(ver_rect, egui::Rounding::same(3.0), egui::Color32::from_rgb(35, 10, 10));
                 p.text(ver_rect.center(), egui::Align2::CENTER_CENTER,
-                    "v2.1.0", egui::FontId::proportional(9.5), C_RED);
+                    "v2.2.0", egui::FontId::proportional(9.5), C_RED);
                 y += 24.0;
                 p.line_segment(
                     [egui::pos2(x0, y), egui::pos2(r.right() - 20.0, y)],

@@ -1,4 +1,4 @@
-# XCX 2.1 Error Handling (Halt)
+# XCX 2.2 Error Handling (Halt)
 
 XCX uses a structured `halt` system for managing runtime conditions and errors.
 

@@ -1,17 +1,16 @@
 pub mod vm;
+pub mod jit;
 pub mod repl;
-
 #[cfg(test)]
 mod tests;
 
 use crate::parser::ast::{Stmt, Expr};
-use crate::backend::vm::{OpCode, Value, FunctionChunk, MethodKind};
+use crate::backend::vm::{OpCode, Value, FunctionChunk, MethodKind, SetData};
 use crate::lexer::token::TokenKind;
 use crate::sema::interner::{Interner, StringId};
 use std::collections::HashMap;
 use std::sync::Arc;
 use parking_lot::RwLock;
-
 
 pub struct Compiler {
     pub globals: HashMap<StringId, usize>,
@@ -31,28 +30,19 @@ pub struct CompileContext<'a> {
 }
 
 impl<'a> CompileContext<'a> {
-    pub fn add_string_constant(&mut self, s: &'static str) -> usize {
-        if let Some(&idx) = self.string_constants.get(s) {
-            return idx;
-        }
-        let idx = self.constants.len();
-        self.string_constants.insert(s.to_string(), idx);
-        self.constants.push(Value::String(s.to_string()));
-        idx
-    }
-
-    pub fn add_constant(&mut self, val: Value) -> usize {
-        if let Value::String(ref s) = val {
-            if let Some(&idx) = self.string_constants.get(s) {
-                return idx;
+    pub fn add_constant(&mut self, val: Value) -> u32 {
+        if val.is_string() {
+            let s = val.as_string();
+            if let Some(&idx) = self.string_constants.get(s.as_ref()) {
+                return idx as u32;
             }
             let idx = self.constants.len();
-            self.string_constants.insert(s.clone(), idx);
+            self.string_constants.insert(s.to_string(), idx);
             self.constants.push(val);
-            return idx;
+            return idx as u32;
         }
         self.constants.push(val);
-        self.constants.len() - 1
+        (self.constants.len() - 1) as u32
     }
 }
 
@@ -62,11 +52,11 @@ pub struct FunctionCompiler {
     pub scopes: Vec<HashMap<StringId, usize>>,
     pub next_local: usize,
     pub loop_stack: Vec<(usize, Vec<usize>, Vec<usize>, Option<usize>)>,
-    pub has_return_type: bool,
     pub parent_locals: Option<HashMap<StringId, usize>>,
     pub captures: Vec<StringId>,
     pub is_main: bool,
     pub is_table_lambda: bool,
+    pub max_locals_used: usize,
 }
 
 impl FunctionCompiler {
@@ -76,8 +66,8 @@ impl FunctionCompiler {
             spans: Vec::new(),
             scopes: vec![HashMap::new()],
             next_local: 0,
+            max_locals_used: 0,
             loop_stack: Vec::new(),
-            has_return_type: false,
             parent_locals,
             captures: Vec::new(),
             is_main,
@@ -98,13 +88,81 @@ impl FunctionCompiler {
         self.scopes.pop();
     }
 
-    fn lookup_local(&self, id: &StringId) -> Option<usize> {
+       pub fn lookup_local(&mut self, id: &StringId) -> Option<usize> {
         for scope in self.scopes.iter().rev() {
             if let Some(&slot) = scope.get(id) {
                 return Some(slot);
             }
         }
+        
+        if let Some(parent) = &self.parent_locals {
+            if parent.contains_key(id) {
+                if let Some(pos) = self.captures.iter().position(|c| c == id) {
+                    return Some(1 + pos);
+                } else {
+                    let pos = self.captures.len();
+                    self.captures.push(*id);
+                    let slot = 1 + pos;
+                    self.scopes[0].insert(*id, slot);
+                    if slot >= self.next_local { self.next_local = slot + 1; }
+                    return Some(slot);
+                }
+            }
+        }
         None
+    }
+
+    fn collect_captures(&self, expr: &Expr, parent_locals: &HashMap<StringId, usize>, out: &mut Vec<StringId>) {
+        use crate::parser::ast::ExprKind;
+        match &expr.kind {
+            ExprKind::Identifier(id) => {
+                if parent_locals.contains_key(id) && !out.contains(id) {
+                    out.push(*id);
+                }
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.collect_captures(left, parent_locals, out);
+                self.collect_captures(right, parent_locals, out);
+            }
+            ExprKind::Unary { right, .. } => {
+                self.collect_captures(right, parent_locals, out);
+            }
+            ExprKind::FunctionCall { args, .. } => {
+                for arg in args { self.collect_captures(arg, parent_locals, out); }
+            }
+            ExprKind::MethodCall { receiver, args, .. } => {
+                self.collect_captures(receiver, parent_locals, out);
+                for arg in args { self.collect_captures(arg, parent_locals, out); }
+            }
+            ExprKind::ArrayLiteral { elements } => {
+                for e in elements { self.collect_captures(e, parent_locals, out); }
+            }
+            ExprKind::MapLiteral { elements, .. } => {
+                for (k, v) in elements {
+                    self.collect_captures(k, parent_locals, out);
+                    self.collect_captures(v, parent_locals, out);
+                }
+            }
+            ExprKind::SetLiteral { elements, range, .. } => {
+                for e in elements { self.collect_captures(e, parent_locals, out); }
+                if let Some(r) = range {
+                    self.collect_captures(&r.start, parent_locals, out);
+                    self.collect_captures(&r.end, parent_locals, out);
+                    if let Some(s) = &r.step { self.collect_captures(s, parent_locals, out); }
+                }
+            }
+            ExprKind::Index { receiver, index } => {
+                self.collect_captures(receiver, parent_locals, out);
+                self.collect_captures(index, parent_locals, out);
+            }
+            ExprKind::MemberAccess { receiver, .. } => {
+                self.collect_captures(receiver, parent_locals, out);
+            }
+            ExprKind::Lambda { body, .. } => {
+                self.collect_captures(body, parent_locals, out);
+            }
+            _ => {}
+        }
     }
 
     fn define_local(&mut self, id: StringId, slot: usize) {
@@ -181,117 +239,212 @@ impl FunctionCompiler {
         }
     }
 
-    pub fn compile_expr(&mut self, expr: &Expr, ctx: &mut CompileContext) {
+    fn get_default_value(&self, ty: &crate::parser::ast::Type, ctx: &mut CompileContext) -> Value {
+        match ty {
+            crate::parser::ast::Type::Int => Value::from_i64(0),
+            crate::parser::ast::Type::Float => Value::from_f64(0.0),
+            crate::parser::ast::Type::String => Value::from_string("".to_string().into()),
+            crate::parser::ast::Type::Bool => Value::from_bool(false),
+            crate::parser::ast::Type::Array(_) => Value::from_array(Arc::new(RwLock::new(Vec::new()))),
+            crate::parser::ast::Type::Set(_) => Value::from_set(Arc::new(RwLock::new(SetData { elements: std::collections::BTreeSet::new(), cache: None }))),
+            crate::parser::ast::Type::Map(_, _) => Value::from_map(Arc::new(RwLock::new(Vec::new()))),
+            crate::parser::ast::Type::Date => Value::from_date(0),
+            crate::parser::ast::Type::Table(cols) => {
+                let vm_cols = cols.iter().map(|c| crate::backend::vm::VMColumn {
+                    name: ctx.interner.lookup(c.name).to_string(),
+                    ty: c.ty.clone(),
+                    is_auto: c.is_auto,
+                }).collect();
+                Value::from_table(Arc::new(RwLock::new(
+                    crate::backend::vm::TableData { columns: vm_cols, rows: Vec::new() }
+                )))
+            }
+            crate::parser::ast::Type::Json => Value::from_json(Arc::new(RwLock::new(serde_json::Value::Null))),
+            crate::parser::ast::Type::Builtin(_) => Value::from_string("builtin".to_string().into()),
+            crate::parser::ast::Type::Unknown => Value::from_i64(0),
+            crate::parser::ast::Type::Fiber(_) => Value::from_bool(false),
+        }
+    }
+
+    pub fn push_reg(&mut self) -> u8 {
+        let r = self.next_local as u8;
+        self.next_local += 1;
+        if self.next_local > self.max_locals_used {
+            self.max_locals_used = self.next_local;
+        }
+        r
+    }
+
+    pub fn pop_reg(&mut self) {
+        self.next_local -= 1;
+    }
+
+    pub fn compile_expr(&mut self, expr: &Expr, ctx: &mut CompileContext) -> u8 {
         match &expr.kind {
             crate::parser::ast::ExprKind::IntLiteral(v) => {
-                let i = ctx.add_constant(Value::Int(*v));
-                self.emit(OpCode::Constant(i), &expr.span);
+                let i = ctx.add_constant(Value::from_i64(*v));
+                let dst = self.push_reg();
+                self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
+                dst
             }
             crate::parser::ast::ExprKind::FloatLiteral(v) => {
-                let i = ctx.add_constant(Value::Float(*v));
-                self.emit(OpCode::Constant(i), &expr.span);
+                let i = ctx.add_constant(Value::from_f64(*v));
+                let dst = self.push_reg();
+                self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
+                dst
             }
             crate::parser::ast::ExprKind::StringLiteral(id) => {
                 let s = ctx.interner.lookup(*id).to_string();
-                let i = ctx.add_constant(Value::String(s));
-                self.emit(OpCode::Constant(i), &expr.span);
+                let i = ctx.add_constant(Value::from_string(Arc::new(s)));
+                let dst = self.push_reg();
+                self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
+                dst
             }
             crate::parser::ast::ExprKind::BoolLiteral(v) => {
-                let i = ctx.add_constant(Value::Bool(*v));
-                self.emit(OpCode::Constant(i), &expr.span);
+                let i = ctx.add_constant(Value::from_bool(*v));
+                let dst = self.push_reg();
+                self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
+                dst
             }
             crate::parser::ast::ExprKind::Identifier(id) => {
                 if let Some(slot) = self.lookup_local(id) {
-                    self.emit(OpCode::GetLocal(slot), &expr.span);
+                    let dst = self.push_reg();
+                    self.emit(OpCode::Move { dst, src: slot as u8 }, &expr.span);
+                    dst
                 } else if let Some(&idx) = ctx.globals.get(id) {
-                    self.emit(OpCode::GetVar(idx), &expr.span);
-                } else if let Some(&fid) = ctx.func_indices.get(id) {
-                    let i = ctx.add_constant(Value::Function(fid));
-                    self.emit(OpCode::Constant(i), &expr.span);
-                } else if let Some(&_parent_slot) = self.parent_locals.as_ref().and_then(|p| p.get(id)) {
-                    let slot = self.next_local;
-                    self.define_local(*id, slot);
-                    self.next_local += 1;
-                    self.captures.push(*id);
-                    self.emit(OpCode::GetLocal(slot), &expr.span);
+                    let dst = self.push_reg();
+                    self.emit(OpCode::GetVar { dst, idx: idx as u32 }, &expr.span);
+                    dst
                 } else if self.is_table_lambda {
-                    self.emit(OpCode::GetLocal(0), &expr.span);
-                    let mi = ctx.add_constant(Value::String(ctx.interner.lookup(*id).to_string()));
-                    self.emit(OpCode::MethodCallCustom(mi, 0), &expr.span);
+                    // In a table lambda, unknown identifiers are treated as row members.
+                    // The row object is always the first parameter (R0).
+                    let dst = self.push_reg();
+                    let mi = ctx.add_constant(Value::from_string(Arc::new(ctx.interner.lookup(*id).to_string())));
+                    self.emit(OpCode::MethodCallCustom { dst, method_name_idx: mi, base: 0, arg_count: 0 }, &expr.span);
+                    dst
+                } else if let Some(&fid) = ctx.func_indices.get(id) {
+                    let dst = self.push_reg();
+                    let i = ctx.add_constant(Value::from_function(fid as u32));
+                    self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
+                    dst
                 } else {
+                    // Default fallback: return identifier name as a string constant
+                    let dst = self.push_reg();
                     let name = ctx.interner.lookup(*id).to_string();
-                    let i = ctx.add_constant(Value::String(name));
-                    self.emit(OpCode::Constant(i), &expr.span);
+                    let i = ctx.add_constant(Value::from_string(Arc::new(name)));
+                    self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
+                    dst
                 }
             }
             crate::parser::ast::ExprKind::FunctionCall { name, args } => {
                 let n = ctx.interner.lookup(*name);
                 if n == "json.parse" && args.len() == 1 {
-                    self.compile_expr(&args[0], ctx);
-                    self.emit(OpCode::JsonParse, &expr.span);
+                    let src = self.compile_expr(&args[0], ctx);
+                    let dst = src; // Reuse register
+                    self.emit(OpCode::JsonParse { dst, src }, &expr.span);
+                    dst
                 } else if n == "terminal.input" {
-                    self.emit(OpCode::Input, &expr.span);
+                    let dst = self.push_reg();
+                    self.emit(OpCode::Input { dst }, &expr.span);
+                    dst
                 } else if n == "i" && args.len() == 1 {
-                    self.compile_expr(&args[0], ctx);
-                    self.emit(OpCode::CastInt, &expr.span);
+                    let src = self.compile_expr(&args[0], ctx);
+                    let dst = src;
+                    self.emit(OpCode::CastInt { dst, src }, &expr.span);
+                    dst
                 } else if n == "f" && args.len() == 1 {
-                    self.compile_expr(&args[0], ctx);
-                    self.emit(OpCode::CastFloat, &expr.span);
+                    let src = self.compile_expr(&args[0], ctx);
+                    let dst = src;
+                    self.emit(OpCode::CastFloat { dst, src }, &expr.span);
+                    dst
                 } else if n == "s" && args.len() == 1 {
-                    self.compile_expr(&args[0], ctx);
-                    self.emit(OpCode::CastString, &expr.span);
+                    let src = self.compile_expr(&args[0], ctx);
+                    let dst = src;
+                    self.emit(OpCode::CastString { dst, src }, &expr.span);
+                    dst
                 } else if n == "b" && args.len() == 1 {
-                    self.compile_expr(&args[0], ctx);
-                    self.emit(OpCode::CastBool, &expr.span);
+                    let src = self.compile_expr(&args[0], ctx);
+                    let dst = src;
+                    self.emit(OpCode::CastBool { dst, src }, &expr.span);
+                    dst
                 } else {
+                    let base = self.next_local as u8;
                     for arg in args {
                         self.compile_expr(arg, ctx);
                     }
+                    let dst = base;
                     if let Some(&fid) = ctx.func_indices.get(name) {
                         if ctx.functions[fid].is_fiber {
-                            self.emit(OpCode::FiberCreate(fid, args.len()), &expr.span);
+                            self.emit(OpCode::FiberCreate { dst, func_idx: fid as u32, base, arg_count: args.len() as u8 }, &expr.span);
                         } else {
-                            self.emit(OpCode::Call(fid, args.len()), &expr.span);
+                            self.emit(OpCode::Call { dst, func_idx: fid as u32, base, arg_count: args.len() as u8 }, &expr.span);
                         }
+                    } else {
+                        // Dynamic call? Not supported yet in 2.2, but we can emit a placeholder
+                        self.emit(OpCode::Halt, &expr.span);
                     }
+                    self.next_local = (base + 1) as usize;
+                    dst
                 }
             }
             crate::parser::ast::ExprKind::ArrayLiteral { elements } => {
+                let base = self.next_local as u8;
                 for e in elements {
                     self.compile_expr(e, ctx);
                 }
-                self.emit(OpCode::ArrayInit(elements.len()), &expr.span);
+                let dst = base;
+                self.emit(OpCode::ArrayInit { dst, base, count: elements.len() as u32 }, &expr.span);
+                self.next_local = (base + 1) as usize;
+                dst
             }
             crate::parser::ast::ExprKind::SetLiteral { elements, range, .. } => {
                 if let Some(r) = range {
-                    self.compile_expr(&r.start, ctx);
-                    self.compile_expr(&r.end, ctx);
-                    if let Some(s) = &r.step {
-                        self.compile_expr(s, ctx);
-                        let t = ctx.add_constant(Value::Bool(true));
-                        self.emit(OpCode::Constant(t), &expr.span);
+                    let start = self.compile_expr(&r.start, ctx);
+                    let end   = self.compile_expr(&r.end, ctx);
+                    let (step, has_step_reg) = if let Some(s) = &r.step {
+                        let step_reg = self.compile_expr(s, ctx);
+                        let h_idx = ctx.add_constant(Value::from_bool(true));
+                        let h_reg = self.push_reg();
+                        self.emit(OpCode::LoadConst { dst: h_reg, idx: h_idx }, &expr.span);
+                        (step_reg, h_reg)
                     } else {
-                        let f = ctx.add_constant(Value::Bool(false));
-                        self.emit(OpCode::Constant(f), &expr.span);
-                    }
-                    self.emit(OpCode::SetRange, &expr.span);
+                        let dummy = self.push_reg(); // just to have something
+                        let f_idx = ctx.add_constant(Value::from_bool(false));
+                        let f_reg = self.push_reg();
+                        self.emit(OpCode::LoadConst { dst: f_reg, idx: f_idx }, &expr.span);
+                        (dummy, f_reg)
+                    };
+                    let dst = start;
+                    self.emit(OpCode::SetRange { dst, start, end, step, has_step: has_step_reg }, &expr.span);
+                    self.next_local = (dst + 1) as usize;
+                    dst
                 } else {
+                    let base = self.next_local as u8;
                     for e in elements {
                         self.compile_expr(e, ctx);
                     }
-                    self.emit(OpCode::SetInit(elements.len()), &expr.span);
+                    let dst = base;
+                    self.emit(OpCode::SetInit { dst, base, count: elements.len() as u32 }, &expr.span);
+                    self.next_local = (base + 1) as usize;
+                    dst
                 }
             }
             crate::parser::ast::ExprKind::MapLiteral { elements, .. } => {
+                let base = self.next_local as u8;
                 for (k, v) in elements {
                     self.compile_expr(k, ctx);
                     self.compile_expr(v, ctx);
                 }
-                self.emit(OpCode::MapInit(elements.len()), &expr.span);
+                let dst = base;
+                self.emit(OpCode::MapInit { dst, base, count: elements.len() as u32 }, &expr.span);
+                self.next_local = (base + 1) as usize;
+                dst
             }
             crate::parser::ast::ExprKind::RandomChoice { set } => {
-                self.compile_expr(set, ctx);
-                self.emit(OpCode::RandomChoice, &expr.span);
+                let src = self.compile_expr(set, ctx);
+                let dst = src;
+                self.emit(OpCode::RandomChoice { dst, src }, &expr.span);
+                dst
             }
             crate::parser::ast::ExprKind::DateLiteral { date_string, format } => {
                 let date_str = ctx.interner.lookup(*date_string).to_string();
@@ -307,769 +460,922 @@ impl FunctionCompiler {
                         .unwrap_or_else(|_| chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
                 };
                 let dt = date.and_hms_opt(0, 0, 0).unwrap();
-                let i = ctx.add_constant(Value::Date(dt));
-                self.emit(OpCode::Constant(i), &expr.span);
+                let i = ctx.add_constant(Value::from_date(dt.and_utc().timestamp_millis()));
+                let dst = self.push_reg();
+                self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
+                dst
             }
             crate::parser::ast::ExprKind::MethodCall { receiver, method, args } => {
                 let method_name = ctx.interner.lookup(*method).to_string();
                 let mut is_store = false;
-                let mut is_date  = false;
-                let mut is_json  = false;
-                let mut is_env   = false;
+                let mut is_date = false;
+                let mut is_json = false;
+                let mut is_env = false;
                 let mut is_crypto = false;
                 if let crate::parser::ast::ExprKind::Identifier(rid) = &receiver.kind {
                     let rname = ctx.interner.lookup(*rid);
                     if rname == "store" { is_store = true; }
-                    if rname == "date"  { is_date  = true; }
-                    if rname == "json"  { is_json  = true; }
-                    if rname == "env"   { is_env   = true; }
+                    if rname == "date" { is_date = true; }
+                    if rname == "json" { is_json = true; }
+                    if rname == "env" { is_env = true; }
                     if rname == "crypto" { is_crypto = true; }
                 }
 
-                // ── store.* ────────────────────────────────────────────────────
                 if is_store {
+                    let base = self.next_local as u8;
                     for arg in args { self.compile_expr(arg, ctx); }
+                    let dst = base; // arbitrary, many store ops don't return meaningful value or return null
                     match method_name.as_str() {
-                        "write"  => self.emit(OpCode::StoreWrite, &expr.span),
-                        "read"   => self.emit(OpCode::StoreRead, &expr.span),
-                        "append" => self.emit(OpCode::StoreAppend, &expr.span),
-                        "exists" => self.emit(OpCode::StoreExists, &expr.span),
-                        "delete" => self.emit(OpCode::StoreDelete, &expr.span),
+                        "write"  => self.emit(OpCode::StoreWrite { base }, &expr.span),
+                        "read"   => self.emit(OpCode::StoreRead { dst, base }, &expr.span),
+                        "append" => self.emit(OpCode::StoreAppend { base }, &expr.span),
+                        "exists" => self.emit(OpCode::StoreExists { dst, base }, &expr.span),
+                        "delete" => self.emit(OpCode::StoreDelete { base }, &expr.span),
                         _ => {}
                     }
-                    return;
+                    self.next_local = (base + 1) as usize;
+                    return dst;
                 }
-                // ── date.now() ─────────────────────────────────────────────────
                 if is_date && method_name == "now" {
-                    self.emit(OpCode::DateNow, &expr.span);
-                    return;
+                    let dst = self.push_reg();
+                    self.emit(OpCode::DateNow { dst }, &expr.span);
+                    return dst;
                 }
-                // ── json.parse() ───────────────────────────────────────────────
                 if is_json && method_name == "parse" {
-                    self.compile_expr(&args[0], ctx);
-                    self.emit(OpCode::JsonParse, &expr.span);
-                    return;
+                    let src = self.compile_expr(&args[0], ctx);
+                    let dst = src;
+                    self.emit(OpCode::JsonParse { dst, src }, &expr.span);
+                    return dst;
                 }
-                // ── env.get("VAR") / env.args() ────────────────────────────────
                 if is_env {
+                    let dst = self.push_reg();
                     if method_name == "get" {
                         if let Some(arg) = args.first() {
-                            self.compile_expr(arg, ctx);
+                            let src = self.compile_expr(arg, ctx);
+                            self.emit(OpCode::EnvGet { dst, src }, &expr.span);
+                            self.pop_reg(); // pop src if it was temp
                         }
-                        self.emit(OpCode::EnvGet, &expr.span);
                     } else if method_name == "args" {
-                        self.emit(OpCode::EnvArgs, &expr.span);
+                        self.emit(OpCode::EnvArgs { dst }, &expr.span);
                     }
-                    return;
+                    return dst;
                 }
-
-                // ── crypto.* ───────────────────────────────────────────────────
                 if is_crypto {
-                    for arg in args {
-                        self.compile_expr(arg, ctx);
-                    }
+                    let base = self.next_local as u8;
+                    for arg in args { self.compile_expr(arg, ctx); }
+                    let dst = base;
                     match method_name.as_str() {
-                        "hash"   => self.emit(OpCode::CryptoHash, &expr.span),
-                        "verify" => self.emit(OpCode::CryptoVerify, &expr.span),
-                        "token"  => self.emit(OpCode::CryptoToken, &expr.span),
-                        _ => {} // Fallback to normal method call if unknown
+                        "hash"   => self.emit(OpCode::CryptoHash { dst, pass_src: base, alg_src: base + 1 }, &expr.span),
+                        "verify" => self.emit(OpCode::CryptoVerify { dst, pass_src: base, hash_src: base + 1, alg_src: base + 2 }, &expr.span),
+                        "token"  => self.emit(OpCode::CryptoToken { dst, len_src: base }, &expr.span),
+                        _ => {}
                     }
-                    return;
+                    self.next_local = (base + 1) as usize;
+                    return dst;
                 }
 
-                // ── table.where(pred) ──────────────────────────────────────────
+                // Normal Method Call
+                let base = self.next_local as u8;
+                self.compile_expr(receiver, ctx);
+
                 if method_name == "where" && args.len() == 1 {
-                    self.compile_expr(receiver, ctx);
-                    self.compile_lambda_method(method_name, &args[0], ctx);
-                    return;
-                }
-                if method_name == "join" && args.len() >= 2 {
-                    self.compile_expr(receiver, ctx);
+                    if !matches!(args[0].kind, crate::parser::ast::ExprKind::Lambda { .. }) {
+                        // Special: Table.where() with shorthand predicate
+                        // Wrap the expression in a synthetic lambda: row -> <expression>
+                        let flat_locals = self.convert_to_flat_locals();
+                        let mut captures = Vec::new();
+                        self.collect_captures(&args[0], &flat_locals, &mut captures);
 
-                    // Always compile the right table as first arg
-                    self.compile_expr(&args[0], ctx);
-
-                    let second = &args[1];
-                    if let crate::parser::ast::ExprKind::Lambda { params, body, .. } = &second.kind {
-                        let lambda_params: Vec<(crate::parser::ast::Type, StringId)> = params.clone();
-
-                        let mut lambda_fc = FunctionCompiler::new(false, Some(self.convert_to_flat_locals()));
-                        lambda_fc.is_table_lambda = true;
-                        for (i, (_, pname)) in lambda_params.iter().enumerate() {
-                            lambda_fc.define_local(*pname, i);
+                        let mut sub = FunctionCompiler::new(false, Some(flat_locals));
+                        sub.is_table_lambda = true;
+                        
+                        // Register captures in sub-compiler so they get assigned to R1, R2, ...
+                        for id in &captures {
+                            sub.lookup_local(id);
                         }
-                        lambda_fc.next_local = lambda_params.len();
-
-                        let ret_stmt = crate::parser::ast::Stmt {
-                            kind: crate::parser::ast::StmtKind::Return(Some(*body.clone())),
-                            span: second.span.clone(),
-                        };
-                        lambda_fc.compile_stmt(&ret_stmt, ctx);
-
-                        let chunk = FunctionChunk {
-                            bytecode: Arc::new(lambda_fc.bytecode),
-                            spans: Arc::new(lambda_fc.spans),
-                            is_fiber: false,
-                            max_locals: lambda_fc.next_local,
-                        };
+                        
+                        sub.next_local = 1 + captures.len(); // R0=row, R1..RK=captures
+                        
+                        let res = sub.compile_expr(&args[0], ctx);
+                        sub.emit(OpCode::Return { src: res }, &args[0].span);
+                        
+                        let captures_to_pass = sub.captures.clone();
+                        
                         let fid = ctx.functions.len();
-                        ctx.functions.push(chunk);
-
-                        let ci = ctx.add_constant(Value::Function(fid));
-
-                        // Reify captures
-                        for captured_id in &lambda_fc.captures {
-                            if let Some(outer_slot) = self.lookup_local(captured_id) {
-                                self.emit(OpCode::GetLocal(outer_slot), &expr.span);
+                        ctx.functions.push(FunctionChunk {
+                            bytecode: Arc::new(sub.bytecode),
+                            spans: Arc::new(sub.spans),
+                            is_fiber: false,
+                            max_locals: sub.max_locals_used.max(sub.next_local),
+                        });
+                        
+                        let f_val = Value::from_function(fid as u32);
+                        let f_idx = ctx.add_constant(f_val);
+                        let f_reg = self.push_reg();
+                        self.emit(OpCode::LoadConst { dst: f_reg, idx: f_idx }, &args[0].span);
+                        
+                        // Push captured variables as additional arguments
+                        for &cap_id in &captures_to_pass {
+                            if let Some(slot) = self.lookup_local(&cap_id) {
+                                let r = self.push_reg();
+                                self.emit(OpCode::Move { dst: r, src: slot as u8 }, &args[0].span);
+                            } else {
+                                // This should not happen since we just identified them as parent locals
+                                self.push_reg(); 
                             }
                         }
-
-                        self.emit(OpCode::MethodCall(MethodKind::Join, 2 + lambda_fc.captures.len()), &expr.span);
-                    } else {
-                        // Key-based join: second arg is left-col string, third is right-col string
-                        self.compile_expr(second, ctx);
-                        if args.len() >= 3 {
-                            self.compile_expr(&args[2], ctx);
-                            self.emit(OpCode::MethodCall(MethodKind::Join, 3), &expr.span);
-                        } else {
-                            // Only 2 args — treat second as a function value expression
-                            self.emit(OpCode::MethodCall(MethodKind::Join, 2), &expr.span);
-                        }
+                        
+                        let dst = base;
+                        self.emit(OpCode::MethodCall { dst, kind: MethodKind::Where, base, arg_count: (1 + captures_to_pass.len()) as u8 }, &expr.span);
+                        self.next_local = (base + 1) as usize;
+                        return dst;
                     }
-                    return;
                 }
 
-                // ── general method call ────────────────────────────────────────
-                self.compile_expr(receiver, ctx);
-                for arg in args {
-                    self.compile_expr(arg, ctx);
-                }
-
+                for arg in args { self.compile_expr(arg, ctx); }
+                let dst = base;
                 if let Some(kind) = self.map_method_kind(&method_name) {
-                    self.emit(OpCode::MethodCall(kind, args.len()), &expr.span);
+                    self.emit(OpCode::MethodCall { dst, kind, base, arg_count: args.len() as u8 }, &expr.span);
                 } else {
-                    let mi = ctx.add_constant(Value::String(method_name));
-                    self.emit(OpCode::MethodCallCustom(mi, args.len()), &expr.span);
+                    let mi = ctx.add_constant(Value::from_string(method_name.into()));
+                    self.emit(OpCode::MethodCallCustom { dst, method_name_idx: mi, base, arg_count: args.len() as u8 }, &expr.span);
                 }
+                self.next_local = (base + 1) as usize;
+                dst
             }
             crate::parser::ast::ExprKind::Binary { left, op, right } => {
-                self.compile_expr(left, ctx);
-                self.compile_expr(right, ctx);
+                let src1 = self.compile_expr(left, ctx);
+                let src2 = self.compile_expr(right, ctx);
+                let dst = src1; // Reuse src1 as dst
                 match op {
-                    TokenKind::Plus         => self.bytecode.push(OpCode::Add),
-                    TokenKind::Minus        => self.bytecode.push(OpCode::Sub),
-                    TokenKind::Star         => self.bytecode.push(OpCode::Mul),
-                    TokenKind::Slash        => self.bytecode.push(OpCode::Div),
-                    TokenKind::Percent      => self.bytecode.push(OpCode::Mod),
-                    TokenKind::Caret        => self.bytecode.push(OpCode::Pow),
-                    TokenKind::EqualEqual   => self.bytecode.push(OpCode::Equal),
-                    TokenKind::BangEqual    => self.bytecode.push(OpCode::NotEqual),
-                    TokenKind::Greater      => self.bytecode.push(OpCode::Greater),
-                    TokenKind::Less         => self.bytecode.push(OpCode::Less),
-                    TokenKind::GreaterEqual => self.bytecode.push(OpCode::GreaterEqual),
-                    TokenKind::LessEqual    => self.bytecode.push(OpCode::LessEqual),
-                    TokenKind::And          => self.bytecode.push(OpCode::And),
-                    TokenKind::Or           => self.bytecode.push(OpCode::Or),
-                    TokenKind::Has          => self.bytecode.push(OpCode::Has),
-                    TokenKind::Union        => self.bytecode.push(OpCode::SetUnion),
-                    TokenKind::Intersection => self.bytecode.push(OpCode::SetIntersection),
-                    TokenKind::Difference   => self.bytecode.push(OpCode::SetDifference),
-                    TokenKind::SymDifference => self.bytecode.push(OpCode::SetSymDifference),
-                    TokenKind::PlusPlus     => self.bytecode.push(OpCode::IntConcat),
+                    TokenKind::Plus => self.emit(OpCode::Add { dst, src1, src2 }, &expr.span),
+                    TokenKind::Minus => self.emit(OpCode::Sub { dst, src1, src2 }, &expr.span),
+                    TokenKind::Star => self.emit(OpCode::Mul { dst, src1, src2 }, &expr.span),
+                    TokenKind::Slash => self.emit(OpCode::Div { dst, src1, src2 }, &expr.span),
+                    TokenKind::Percent => self.emit(OpCode::Mod { dst, src1, src2 }, &expr.span),
+                    TokenKind::Caret => self.emit(OpCode::Pow { dst, src1, src2 }, &expr.span),
+                    TokenKind::EqualEqual => self.emit(OpCode::Equal { dst, src1, src2 }, &expr.span),
+                    TokenKind::BangEqual => self.emit(OpCode::NotEqual { dst, src1, src2 }, &expr.span),
+                    TokenKind::Greater => self.emit(OpCode::Greater { dst, src1, src2 }, &expr.span),
+                    TokenKind::Less => self.emit(OpCode::Less { dst, src1, src2 }, &expr.span),
+                    TokenKind::GreaterEqual => self.emit(OpCode::GreaterEqual { dst, src1, src2 }, &expr.span),
+                    TokenKind::LessEqual => self.emit(OpCode::LessEqual { dst, src1, src2 }, &expr.span),
+                    TokenKind::And => self.emit(OpCode::And { dst, src1, src2 }, &expr.span),
+                    TokenKind::Or => self.emit(OpCode::Or { dst, src1, src2 }, &expr.span),
+                    TokenKind::Has => self.emit(OpCode::Has { dst, src1, src2 }, &expr.span),
+                    TokenKind::Union => self.emit(OpCode::SetUnion { dst, src1, src2 }, &expr.span),
+                    TokenKind::Intersection => self.emit(OpCode::SetIntersection { dst, src1, src2 }, &expr.span),
+                    TokenKind::Difference => self.emit(OpCode::SetDifference { dst, src1, src2 }, &expr.span),
+                    TokenKind::SymDifference => self.emit(OpCode::SetSymDifference { dst, src1, src2 }, &expr.span),
+                    TokenKind::PlusPlus => self.emit(OpCode::IntConcat { dst, src1, src2 }, &expr.span),
                     _ => {}
                 }
+                self.next_local = (dst + 1) as usize;
+                dst
             }
             crate::parser::ast::ExprKind::Unary { op, right } => {
                 match op {
                     TokenKind::Not | TokenKind::Bang => {
-                        self.compile_expr(right, ctx);
-                        self.emit(OpCode::Not, &expr.span);
+                        let src = self.compile_expr(right, ctx);
+                        let dst = src;
+                        self.emit(OpCode::Not { dst, src }, &expr.span);
+                        dst
                     }
                     TokenKind::Minus => {
                         let zero = if matches!(right.kind, crate::parser::ast::ExprKind::FloatLiteral(_)) {
-                            ctx.add_constant(Value::Float(0.0))
+                            ctx.add_constant(Value::from_f64(0.0))
                         } else {
-                            ctx.add_constant(Value::Int(0))
+                            ctx.add_constant(Value::from_i64(0))
                         };
-                        self.emit(OpCode::Constant(zero), &expr.span);
-                        self.compile_expr(right, ctx);
-                        self.emit(OpCode::Sub, &expr.span);
+                        let src1 = self.push_reg();
+                        self.emit(OpCode::LoadConst { dst: src1, idx: zero }, &expr.span);
+                        let src2 = self.compile_expr(right, ctx);
+                        let dst = src1;
+                        self.emit(OpCode::Sub { dst, src1, src2 }, &expr.span);
+                        self.next_local = (dst + 1) as usize;
+                        dst
                     }
-                    _ => {}
+                    _ => self.push_reg() // should not happen
                 }
             }
             crate::parser::ast::ExprKind::Index { receiver, index } => {
+                let base = self.next_local as u8;
                 self.compile_expr(receiver, ctx);
                 self.compile_expr(index, ctx);
-                self.emit(OpCode::MethodCall(MethodKind::Get, 1), &expr.span);
+                let dst = base;
+                self.emit(OpCode::MethodCall { dst, kind: MethodKind::Get, base, arg_count: 1 }, &expr.span);
+                self.next_local = (base + 1) as usize;
+                dst
             }
-            crate::parser::ast::ExprKind::Lambda { .. } => {
-                // Lambdas are compiled when they are passed as arguments to methods like .where() or .join()
-                // or when they are assigned to variables.
-                // If a lambda appears as a standalone expression, it evaluates to a function value.
-                let f = ctx.add_constant(Value::Bool(false)); // Placeholder for now, actual function value will be created by FunctionCompiler
-                self.emit(OpCode::Constant(f), &expr.span);
+            crate::parser::ast::ExprKind::Lambda { params, return_type: _, body } => {
+                let mut sub = FunctionCompiler::new(false, None);
+                for (i, (_, param_name)) in params.iter().enumerate() {
+                    sub.define_local(*param_name, i);
+                }
+                sub.next_local = params.len();
+                let res = sub.compile_expr(body, ctx);
+                sub.emit(OpCode::Return { src: res }, &expr.span);
+                
+                let fid = ctx.functions.len();
+                ctx.functions.push(FunctionChunk {
+                    bytecode: Arc::new(sub.bytecode),
+                    spans: Arc::new(sub.spans),
+                    is_fiber: false,
+                    max_locals: sub.max_locals_used.max(sub.next_local),
+                });
+                
+                let f_val = Value::from_function(fid as u32);
+                let f_idx = ctx.add_constant(f_val);
+                let dst = self.push_reg();
+                self.emit(OpCode::LoadConst { dst, idx: f_idx }, &expr.span);
+                dst
             }
             crate::parser::ast::ExprKind::Tuple(exprs) => {
+                let base = self.next_local as u8;
                 for e in exprs { self.compile_expr(e, ctx); }
-                self.emit(OpCode::ArrayInit(exprs.len()), &expr.span);
+                let dst = base;
+                self.emit(OpCode::ArrayInit { dst, base, count: exprs.len() as u32 }, &expr.span);
+                self.next_local = (base + 1) as usize;
+                dst
             }
             crate::parser::ast::ExprKind::ArrayOrSetLiteral { elements } => {
+                let base = self.next_local as u8;
                 for e in elements { self.compile_expr(e, ctx); }
-                self.emit(OpCode::ArrayInit(elements.len()), &expr.span);
+                let dst = base;
+                self.emit(OpCode::ArrayInit { dst, base, count: elements.len() as u32 }, &expr.span);
+                self.next_local = (base + 1) as usize;
+                dst
             }
             crate::parser::ast::ExprKind::TerminalCommand(cmd_id, arg) => {
                 let cmd = ctx.interner.lookup(*cmd_id);
-                if cmd == "exit"       { self.bytecode.push(OpCode::TerminalExit); }
-                else if cmd == "clear" { self.bytecode.push(OpCode::TerminalClear); }
-                else if cmd == "run"   {
+                if cmd == "exit" { self.emit(OpCode::TerminalExit, &expr.span); }
+                else if cmd == "clear" { self.emit(OpCode::TerminalClear, &expr.span); }
+                else if cmd == "run" {
                     if let Some(a) = arg {
-                        self.compile_expr(a, ctx);
-                        self.emit(OpCode::TerminalRun, &expr.span);
+                        let cmd_src = self.compile_expr(a, ctx);
+                        let dst = self.push_reg();
+                        self.emit(OpCode::TerminalRun { dst, cmd_src }, &expr.span);
+                        self.pop_reg(); // pop cmd_src
+                        return dst;
                     }
                 }
+                self.push_reg() // Return dummy
+
             }
             crate::parser::ast::ExprKind::MemberAccess { receiver, member } => {
+                let base = self.next_local as u8;
                 self.compile_expr(receiver, ctx);
                 let member_name = ctx.interner.lookup(*member).to_string();
+                let dst = base;
                 if let Some(kind) = self.map_method_kind(&member_name) {
-                    self.emit(OpCode::MethodCall(kind, 0), &expr.span);
+                    self.emit(OpCode::MethodCall { dst, kind, base, arg_count: 0 }, &expr.span);
                 } else {
-                    let mi = ctx.add_constant(Value::String(member_name));
-                    self.emit(OpCode::MethodCallCustom(mi, 0), &expr.span);
+                    let mi = ctx.add_constant(Value::from_string(member_name.into()));
+                    self.emit(OpCode::MethodCallCustom { dst, method_name_idx: mi, base, arg_count: 0 }, &expr.span);
                 }
+                self.next_local = (base + 1) as usize;
+                dst
             }
             crate::parser::ast::ExprKind::TableLiteral { columns, rows } => {
+                let base = self.next_local as u8;
                 for row in rows { for val in row { self.compile_expr(val, ctx); } }
                 let vm_cols = columns.iter().map(|c| crate::backend::vm::VMColumn {
                     name: ctx.interner.lookup(c.name).to_string(),
                     ty: c.ty.clone(),
                     is_auto: c.is_auto,
                 }).collect();
-                let skeleton = Value::Table(Arc::new(RwLock::new(
+                let skeleton = Value::from_table(Arc::new(RwLock::new(
                     crate::backend::vm::TableData { columns: vm_cols, rows: Vec::new() }
                 )));
                 let ci = ctx.add_constant(skeleton);
-                self.emit(OpCode::TableInit(ci, rows.len()), &expr.span);
+                let dst = base;
+                self.emit(OpCode::TableInit { dst, skeleton_idx: ci, base, row_count: rows.len() as u32 }, &expr.span);
+                self.next_local = (base + 1) as usize;
+                dst
             }
             crate::parser::ast::ExprKind::RawBlock(id) => {
                 let s = ctx.interner.lookup(*id).to_string();
-                let i = ctx.add_constant(Value::String(s));
-                self.emit(OpCode::Constant(i), &expr.span);
+                let i = ctx.add_constant(Value::from_string(s.into()));
+                let dst = self.push_reg();
+                self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
+                dst
             }
             crate::parser::ast::ExprKind::NetCall { method, url, body } => {
-                self.compile_expr(url, ctx);
-                if let Some(b) = body {
-                    self.compile_expr(b, ctx);
+                let url_src = self.compile_expr(url, ctx);
+                let body_src = if let Some(b) = body {
+                    self.compile_expr(b, ctx)
                 } else {
-                    let f = ctx.add_constant(Value::Bool(false));
-                    self.emit(OpCode::Constant(f), &expr.span);
-                }
-                let mi = ctx.add_constant(Value::String(ctx.interner.lookup(*method).to_string()));
-                self.emit(OpCode::HttpCall(mi), &expr.span);
+                    let f = ctx.add_constant(Value::from_bool(false));
+                    let r = self.push_reg();
+                    self.emit(OpCode::LoadConst { dst: r, idx: f }, &expr.span);
+                    r
+                };
+                let method_idx = ctx.add_constant(Value::from_string(ctx.interner.lookup(*method).to_string().into()));
+                let dst = url_src;
+                self.emit(OpCode::HttpCall { dst, method_idx, url_src, body_src }, &expr.span);
+                self.next_local = (dst + 1) as usize;
+                dst
             }
             crate::parser::ast::ExprKind::NetRespond { status, body, headers } => {
-                self.compile_expr(status, ctx);
-                self.compile_expr(body, ctx);
-                if let Some(h) = headers {
-                    self.compile_expr(h, ctx);
+                let status_src = self.compile_expr(status, ctx);
+                let body_src   = self.compile_expr(body, ctx);
+                let headers_src = if let Some(h) = headers {
+                    self.compile_expr(h, ctx)
                 } else {
-                    let f = ctx.add_constant(Value::Bool(false));
-                    self.emit(OpCode::Constant(f), &expr.span);
-                }
-                self.emit(OpCode::HttpRespond, &expr.span);
+                    let f = ctx.add_constant(Value::from_bool(false));
+                    let r = self.push_reg();
+                    self.emit(OpCode::LoadConst { dst: r, idx: f }, &expr.span);
+                    r
+                };
+                self.emit(OpCode::HttpRespond { status_src, body_src, headers_src }, &expr.span);
+                self.next_local = status_src as usize; // Cleanup temps
+                self.push_reg() // Return dummy
             }
         }
     }
 
-    /// Helper: compile a single-argument lambda/expr predicate into an anonymous
-    /// function, then emit MethodCall(method_name, 1).
-    /// Used by `.where()` and can be reused for similar single-pred methods.
-    fn compile_lambda_method(
-        &mut self,
-        _method_name: String,
-        pred_expr: &Expr,
-        ctx: &mut CompileContext,
-    ) {
-        let (lambda_body, lambda_params) =
-            if let crate::parser::ast::ExprKind::Lambda { params, body, .. } = &pred_expr.kind {
-                (
-                    *body.clone(),
-                    params.clone(),
-                )
-            } else {
-                let row_tmp = ctx.interner.intern("__row_tmp");
-                (pred_expr.clone(), vec![(crate::parser::ast::Type::Int, row_tmp)])
-            };
 
-        let mut lambda_fc = FunctionCompiler::new(false, Some(self.convert_to_flat_locals()));
-        lambda_fc.is_table_lambda = true;
-        for (i, (_, pname)) in lambda_params.iter().enumerate() {
-            lambda_fc.define_local(*pname, i);
-        }
-        lambda_fc.next_local = lambda_params.len();
-
-        let ret_stmt = crate::parser::ast::Stmt {
-            kind: crate::parser::ast::StmtKind::Return(Some(lambda_body)),
-            span: pred_expr.span.clone(),
-        };
-        lambda_fc.compile_stmt(&ret_stmt, ctx);
-
-        let chunk = FunctionChunk {
-            bytecode: Arc::new(lambda_fc.bytecode),
-            spans: Arc::new(lambda_fc.spans),
-            is_fiber: false,
-            max_locals: lambda_fc.next_local,
-        };
-        let fid = ctx.functions.len();
-        ctx.functions.push(chunk);
-
-        let ci = ctx.add_constant(Value::Function(fid));
-        self.emit(OpCode::Constant(ci), &pred_expr.span);
-
-        // Reify captures from outer scope
-        for captured_id in &lambda_fc.captures {
-            if let Some(outer_slot) = self.lookup_local(captured_id) {
-                self.emit(OpCode::GetLocal(outer_slot), &pred_expr.span);
-            }
-        }
-
-        self.emit(OpCode::MethodCall(MethodKind::Where, 1 + lambda_fc.captures.len()), &pred_expr.span);
-    }
 
     pub fn compile_stmt(&mut self, stmt: &Stmt, ctx: &mut CompileContext) {
         match &stmt.kind {
             crate::parser::ast::StmtKind::VarDecl { ty, name, value, .. } => {
-                if let Some(val) = value {
-                    self.compile_expr(val, ctx);
-                } else {
-                    let default_val = match ty {
-                        crate::parser::ast::Type::Int    => Value::Int(0),
-                        crate::parser::ast::Type::Float  => Value::Float(0.0),
-                        crate::parser::ast::Type::String => Value::String("".to_string()),
-                        crate::parser::ast::Type::Bool   => Value::Bool(false),
-                        crate::parser::ast::Type::Array(_) => Value::Array(
-                            Arc::new(RwLock::new(Vec::new()))
-                        ),
-                        crate::parser::ast::Type::Set(_) => Value::Set(
-                            Arc::new(RwLock::new(std::collections::BTreeSet::new()))
-                        ),
-                        crate::parser::ast::Type::Map(_, _) => Value::Map(
-                            Arc::new(RwLock::new(Vec::new()))
-                        ),
-                        crate::parser::ast::Type::Date => Value::Date(
-                            chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc()
-                        ),
-                        crate::parser::ast::Type::Table(cols) => {
-                            let vm_cols = cols.iter().map(|c| crate::backend::vm::VMColumn {
-                                name: ctx.interner.lookup(c.name).to_string(),
-                                ty: c.ty.clone(),
-                                is_auto: c.is_auto,
-                            }).collect();
-                            Value::Table(Arc::new(RwLock::new(
-                                crate::backend::vm::TableData { columns: vm_cols, rows: Vec::new() }
-                            )))
-                        }
-                        crate::parser::ast::Type::Json => Value::Json(
-                            Arc::new(RwLock::new(serde_json::Value::Null))
-                        ),
-                        crate::parser::ast::Type::Builtin(_) => Value::String("builtin".to_string()),
-                        crate::parser::ast::Type::Unknown    => Value::Int(0),
-                        crate::parser::ast::Type::Fiber(_)   => Value::Bool(false),
+                let dst = if self.is_main && self.scopes.len() == 1 {
+                    // Globals: Evaluate into a temp, then SetVar
+                    let src = if let Some(val) = value {
+                        self.compile_expr(val, ctx)
+                    } else {
+                        let default_val = self.get_default_value(ty, ctx);
+                        let idx = ctx.add_constant(default_val);
+                        let r = self.push_reg();
+                        self.emit(OpCode::LoadConst { dst: r, idx }, &stmt.span);
+                        r
                     };
-                    let idx = ctx.add_constant(default_val);
-                    self.emit(OpCode::Constant(idx), &stmt.span);
-                }
-                if self.is_main && self.scopes.len() == 1 {
-                    let idx = *ctx.globals.get(name).expect("Global not registered in 1st pass");
-                    self.emit(OpCode::SetVar(idx), &stmt.span);
+                    let idx = *ctx.globals.get(name).expect("Global not registered");
+                    self.emit(OpCode::SetVar { idx: idx as u32, src }, &stmt.span);
+                    self.pop_reg();
+                    return;
                 } else {
-                    let slot = self.next_local;
+                    let slot = self.push_reg() as usize;
                     self.define_local(*name, slot);
-                    self.next_local += 1;
-                    self.emit(OpCode::SetLocal(slot), &stmt.span);
+                    slot as u8
+                };
+
+                if let Some(val) = value {
+                    let src = self.compile_expr(val, ctx);
+                    if src != dst {
+                        self.emit(OpCode::Move { dst, src }, &stmt.span);
+                    }
+                    self.next_local = (dst + 1) as usize; // Keep dst, pop src if it was temp
+                } else {
+                    let default_val = self.get_default_value(ty, ctx);
+                    let idx = ctx.add_constant(default_val);
+                    self.emit(OpCode::LoadConst { dst, idx }, &stmt.span);
                 }
             }
             crate::parser::ast::StmtKind::Print(expr) => {
-                self.compile_expr(expr, ctx);
-                self.emit(OpCode::Print, &stmt.span);
+                let src = self.compile_expr(expr, ctx);
+                self.emit(OpCode::Print { src }, &stmt.span);
+                self.pop_reg();
             }
             crate::parser::ast::StmtKind::FunctionCallStmt { name, args } => {
-                for arg in args {
-                    self.compile_expr(arg, ctx);
-                }
+                let base = self.next_local as u8;
+                for arg in args { self.compile_expr(arg, ctx); }
                 if let Some(&func_id) = ctx.func_indices.get(name) {
-                    self.emit(OpCode::Call(func_id, args.len()), &stmt.span);
+                    let dst = base; // discard result or store in base
+                    self.emit(OpCode::Call { dst, func_idx: func_id as u32, base, arg_count: args.len() as u8 }, &stmt.span);
                 }
+                self.next_local = base as usize;
             }
             crate::parser::ast::StmtKind::Input(name) => {
-                self.emit(OpCode::Input, &stmt.span);
+                let dst = self.push_reg();
+                self.emit(OpCode::Input { dst }, &stmt.span);
                 if let Some(slot) = self.lookup_local(name) {
-                    self.emit(OpCode::SetLocal(slot), &stmt.span);
+                    self.emit(OpCode::Move { dst: slot as u8, src: dst }, &stmt.span);
                 } else if let Some(&global_idx) = ctx.globals.get(name) {
-                    self.emit(OpCode::SetVar(global_idx), &stmt.span);
+                    self.emit(OpCode::SetVar { idx: global_idx as u32, src: dst }, &stmt.span);
                 }
+                self.pop_reg();
             }
             crate::parser::ast::StmtKind::Assign { name, value } => {
-                self.compile_expr(value, ctx);
-                if let Some(slot) = self.lookup_local(name) {
-                    self.emit(OpCode::SetLocal(slot), &stmt.span);
-                } else if let Some(&global_idx) = ctx.globals.get(name) {
-                    self.emit(OpCode::SetVar(global_idx), &stmt.span);
+                let mut optimized = false;
+                if let crate::parser::ast::ExprKind::Binary { left, op, right } = &value.kind {
+                    if *op == TokenKind::Plus {
+                        let is_inc = match (&left.kind, &right.kind) {
+                            (crate::parser::ast::ExprKind::Identifier(id), crate::parser::ast::ExprKind::IntLiteral(1)) if id == name => true,
+                            (crate::parser::ast::ExprKind::IntLiteral(1), crate::parser::ast::ExprKind::Identifier(id)) if id == name => true,
+                            _ => false,
+                        };
+                        if is_inc {
+                            if let Some(slot) = self.lookup_local(name) {
+                                self.emit(OpCode::IncLocal { reg: slot as u8 }, &stmt.span);
+                                optimized = true;
+                            } else if let Some(&global_idx) = ctx.globals.get(name) {
+                                self.emit(OpCode::IncVar { idx: global_idx as u32 }, &stmt.span);
+                                optimized = true;
+                            }
+                        }
+                    }
+                }
+                if !optimized {
+                    let src = self.compile_expr(value, ctx);
+                    if let Some(slot) = self.lookup_local(name) {
+                        self.emit(OpCode::Move { dst: slot as u8, src }, &stmt.span);
+                    } else if let Some(&global_idx) = ctx.globals.get(name) {
+                        self.emit(OpCode::SetVar { idx: global_idx as u32, src }, &stmt.span);
+                    }
+                    self.pop_reg();
                 }
             }
             crate::parser::ast::StmtKind::If { condition, then_branch, else_ifs, else_branch } => {
                 let mut end_jumps = Vec::new();
-                self.compile_expr(condition, ctx);
+                let cond_reg = self.compile_expr(condition, ctx);
                 let jmp_idx = self.bytecode.len();
-                self.emit(OpCode::JumpIfFalse(0), &stmt.span);
+                self.emit(OpCode::JumpIfFalse { src: cond_reg, target: 0 }, &stmt.span);
+                self.pop_reg(); // pop condition result after test
                 
                 self.enter_scope();
-                for s in then_branch {
-                    self.compile_stmt(s, ctx);
-                }
+                for s in then_branch { self.compile_stmt(s, ctx); }
                 self.exit_scope();
-
+                
                 if !else_ifs.is_empty() || else_branch.is_some() {
                     end_jumps.push(self.bytecode.len());
-                    self.emit(OpCode::Jump(0), &stmt.span);
+                    self.emit(OpCode::Jump { target: 0 }, &stmt.span);
                 }
-                self.bytecode[jmp_idx] = OpCode::JumpIfFalse(self.bytecode.len());
+                
+                let jump_target = self.bytecode.len() as u32;
+                if let OpCode::JumpIfFalse { ref mut target, .. } = self.bytecode[jmp_idx] {
+                    *target = jump_target;
+                }
+
                 for (elif_cond, elif_branch) in else_ifs {
-                    self.compile_expr(elif_cond, ctx);
+                    let elif_cond_reg = self.compile_expr(elif_cond, ctx);
                     let elif_jmp = self.bytecode.len();
-                    self.emit(OpCode::JumpIfFalse(0), &stmt.span);
+                    self.emit(OpCode::JumpIfFalse { src: elif_cond_reg, target: 0 }, &stmt.span);
+                    self.pop_reg();
+
                     self.enter_scope();
-                    for s in elif_branch {
-                        self.compile_stmt(s, ctx);
-                    }
+                    for s in elif_branch { self.compile_stmt(s, ctx); }
                     self.exit_scope();
+                    
                     end_jumps.push(self.bytecode.len());
-                    self.emit(OpCode::Jump(0), &stmt.span);
-                    self.bytecode[elif_jmp] = OpCode::JumpIfFalse(self.bytecode.len());
+                    self.emit(OpCode::Jump { target: 0 }, &stmt.span);
+                    
+                    let elif_target = self.bytecode.len() as u32;
+                    if let OpCode::JumpIfFalse { ref mut target, .. } = self.bytecode[elif_jmp] {
+                        *target = elif_target;
+                    }
                 }
+                
                 if let Some(branch) = else_branch {
                     self.enter_scope();
-                    for s in branch {
-                        self.compile_stmt(s, ctx);
-                    }
+                    for s in branch { self.compile_stmt(s, ctx); }
                     self.exit_scope();
                 }
-                let final_idx = self.bytecode.len();
-                for idx in end_jumps { self.bytecode[idx] = OpCode::Jump(final_idx); }
+                
+                let final_idx = self.bytecode.len() as u32;
+                for idx in end_jumps {
+                    if let OpCode::Jump { ref mut target } = self.bytecode[idx] {
+                        *target = final_idx;
+                    }
+                }
             }
             crate::parser::ast::StmtKind::While { condition, body } => {
                 let start_p = self.bytecode.len();
                 self.loop_stack.push((start_p, Vec::new(), Vec::new(), None));
-                self.compile_expr(condition, ctx);
+                
+                let cond_reg = self.compile_expr(condition, ctx);
                 let exit_jmp = self.bytecode.len();
-                self.emit(OpCode::JumpIfFalse(0), &stmt.span);
+                self.emit(OpCode::JumpIfFalse { src: cond_reg, target: 0 }, &stmt.span);
+                self.pop_reg();
+                
                 self.enter_scope();
-                for s in body {
-                    self.compile_stmt(s, ctx);
-                }
+                for s in body { self.compile_stmt(s, ctx); }
                 self.exit_scope();
-                self.emit(OpCode::Jump(start_p), &stmt.span);
-                self.bytecode[exit_jmp] = OpCode::JumpIfFalse(self.bytecode.len());
+                
+                self.emit(OpCode::Jump { target: start_p as u32 }, &stmt.span);
+                
+                let exit_target = self.bytecode.len() as u32;
+                if let OpCode::JumpIfFalse { ref mut target, .. } = self.bytecode[exit_jmp] {
+                    *target = exit_target;
+                }
+                
                 let (_, breaks, continues, _) = self.loop_stack.pop().unwrap();
-                let end_label = self.bytecode.len();
-                for b in breaks    { self.bytecode[b] = OpCode::Jump(end_label); }
-                for c in continues { self.bytecode[c] = OpCode::Jump(start_p); }
+                let end_label = self.bytecode.len() as u32;
+                for b in breaks {
+                    if let OpCode::Jump { ref mut target } = self.bytecode[b] { *target = end_label; }
+                }
+                for c in continues {
+                    if let OpCode::Jump { ref mut target } = self.bytecode[c] { *target = start_p as u32; }
+                }
             }
             crate::parser::ast::StmtKind::For { var_name, start, end, step, body, iter_type } => {
                 match iter_type {
                     crate::parser::ast::ForIterType::Array => {
-                        // Push collection, store in temp slot
-                        self.compile_expr(start, ctx);
-                        let array_slot = self.next_local;
-                        self.next_local += 1;
-                        self.emit(OpCode::SetLocal(array_slot), &stmt.span);
+                        // 1. Compile the array expression (receiver)
+                        let array_reg = self.compile_expr(start, ctx);  // receiver in array_reg
 
-                        // Index counter starts at 0
-                        let zero_idx = ctx.add_constant(Value::Int(0));
-                        self.emit(OpCode::Constant(zero_idx), &stmt.span);
-                        let index_slot = self.next_local;
-                        self.next_local += 1;
-                        self.emit(OpCode::SetLocal(index_slot), &stmt.span);
+                        // 2. Reserve the argument slot (array_reg+1)
+                        let arg_reg = self.push_reg();                  // must be array_reg+1
+                        debug_assert_eq!(arg_reg, array_reg + 1, "Argument register not consecutive");
 
-                        // Loop variable slot
-                        let loop_var_slot = if let Some(s) = self.lookup_local(var_name) { s } else {
-                            let s = self.next_local;
-                            self.define_local(*var_name, s);
-                            self.next_local += 1;
+                        // 3. Get array size (for loop bound)
+                        let size_reg = self.push_reg();
+                        self.emit(OpCode::MethodCall { dst: size_reg, kind: MethodKind::Size, base: array_reg, arg_count: 0 }, &stmt.span);
+
+                        // 4. Index register (starts at 0)
+                        let zero_idx = ctx.add_constant(Value::from_i64(0));
+                        let index_reg = self.push_reg();
+                        self.emit(OpCode::LoadConst { dst: index_reg, idx: zero_idx }, &stmt.span);
+
+                        // 5. Loop variable (the element)
+                        let loop_var_reg = if let Some(s) = self.lookup_local(var_name) { s as u8 } else {
+                            let s = self.push_reg();
+                            self.define_local(*var_name, s as usize);
                             s
                         };
 
                         let start_label = self.bytecode.len();
-                        self.enter_scope(); // For loop variable and body
+                        self.enter_scope();
                         self.loop_stack.push((start_label, Vec::new(), Vec::new(), None));
 
-                        // Condition: collection.size() > index
-                        self.bytecode.push(OpCode::GetLocal(array_slot));
-                        self.spans.push(stmt.span.clone());
-                        self.emit(OpCode::MethodCall(MethodKind::Size, 0), &stmt.span);
-                        self.emit(OpCode::GetLocal(index_slot), &stmt.span);
-                        self.emit(OpCode::Greater, &stmt.span);
-                        let exit_jmp = self.bytecode.len();
-                        self.emit(OpCode::JumpIfFalse(0), &stmt.span);
+                        let saved_next_local = self.next_local;
 
-                        // Load element: collection.get(index)
-                        self.emit(OpCode::GetLocal(array_slot), &stmt.span);
-                        self.emit(OpCode::GetLocal(index_slot), &stmt.span);
-                        self.emit(OpCode::MethodCall(MethodKind::Get, 1), &stmt.span);
-                        self.emit(OpCode::SetLocal(loop_var_slot), &stmt.span);
+                        // Loop condition: index < size
+                        let test_reg = self.push_reg();
+                        self.emit(OpCode::Less { dst: test_reg, src1: index_reg, src2: size_reg }, &stmt.span);
+                        let exit_jmp = self.bytecode.len();
+                        self.emit(OpCode::JumpIfFalse { src: test_reg, target: 0 }, &stmt.span);
+                        self.pop_reg(); // test_reg
+
+                        // *** FIX: copy index to argument slot before calling .get ***
+                        self.emit(OpCode::Move { dst: arg_reg, src: index_reg }, &stmt.span);
+                        self.emit(OpCode::MethodCall { dst: loop_var_reg, kind: MethodKind::Get, base: array_reg, arg_count: 1 }, &stmt.span);
+
+                        // Execute loop body
+                        for s in body { self.compile_stmt(s, ctx); }
+
+                        // Restore register stack after body
+                        self.next_local = saved_next_local;
+
+                        // Increment index and jump back
+                        let cont_label = self.bytecode.len();
+                        let len = self.bytecode.len();
+                        if len > 0 {
+                            if let OpCode::IncLocal { reg } = self.bytecode[len - 1] {
+                                self.bytecode.pop();
+                                self.emit(OpCode::IncLocalLoopNext { inc_reg: reg, reg: index_reg, limit_reg: size_reg, target: start_label as u32 }, &stmt.span);
+                            } else {
+                                self.emit(OpCode::IncLocal { reg: index_reg }, &stmt.span);
+                                self.emit(OpCode::Jump { target: start_label as u32 }, &stmt.span);
+                            }
+                        }
+                        
+
+                        let end_label = self.bytecode.len() as u32;
+                        if let OpCode::JumpIfFalse { ref mut target, .. } = self.bytecode[exit_jmp] {
+                            *target = end_label;
+                        }
+
+                        let (_, breaks, continues, _) = self.loop_stack.pop().unwrap();
+                        self.exit_scope();
+                        for b in breaks {
+                            if let OpCode::Jump { ref mut target } = self.bytecode[b] { *target = end_label; }
+                        }
+                        for c in continues {
+                            if let OpCode::Jump { ref mut target } = self.bytecode[c] { *target = cont_label as u32; }
+                        }
+
+                        // Clean up – all registers up to array_reg are now unused
+                        self.next_local = array_reg as usize;
+                    }
+                    crate::parser::ast::ForIterType::Set => {
+                        // 1. Compile the set expression (receiver)
+                        let set_reg = self.compile_expr(start, ctx);
+
+                        // 2. Convert Set to Array using .values() method
+                        let array_reg = self.push_reg();
+                        self.emit(OpCode::MethodCall { dst: array_reg, kind: MethodKind::Values, base: set_reg, arg_count: 0 }, &stmt.span);
+
+                        // 3. Delegate to Array iteration logic (re-using array_reg)
+                        let arg_reg = self.push_reg();
+                        let size_reg = self.push_reg();
+                        self.emit(OpCode::MethodCall { dst: size_reg, kind: MethodKind::Size, base: array_reg, arg_count: 0 }, &stmt.span);
+
+                        let zero_idx = ctx.add_constant(Value::from_i64(0));
+                        let index_reg = self.push_reg();
+                        self.emit(OpCode::LoadConst { dst: index_reg, idx: zero_idx }, &stmt.span);
+
+                        let loop_var_reg = if let Some(s) = self.lookup_local(var_name) { s as u8 } else {
+                            let s = self.push_reg();
+                            self.define_local(*var_name, s as usize);
+                            s
+                        };
+
+                        let start_label = self.bytecode.len();
+                        self.enter_scope();
+                        self.loop_stack.push((start_label, Vec::new(), Vec::new(), None));
+
+                        let saved_next_local = self.next_local;
+
+                        let test_reg = self.push_reg();
+                        self.emit(OpCode::Less { dst: test_reg, src1: index_reg, src2: size_reg }, &stmt.span);
+                        let exit_jmp = self.bytecode.len();
+                        self.emit(OpCode::JumpIfFalse { src: test_reg, target: 0 }, &stmt.span);
+                        self.pop_reg();
+
+                        self.emit(OpCode::Move { dst: arg_reg, src: index_reg }, &stmt.span);
+                        self.emit(OpCode::MethodCall { dst: loop_var_reg, kind: MethodKind::Get, base: array_reg, arg_count: 1 }, &stmt.span);
 
                         for s in body { self.compile_stmt(s, ctx); }
 
-                        // Increment index
-                        let cont_label = self.bytecode.len();
-                        self.emit(OpCode::GetLocal(index_slot), &stmt.span);
-                        if let Some(s) = step {
-                            self.compile_expr(s, ctx);
-                        } else {
-                            let one_idx = ctx.add_constant(Value::Int(1));
-                            self.bytecode.push(OpCode::Constant(one_idx));
-                        }
-                        self.bytecode.push(OpCode::Add);
-                        self.emit(OpCode::SetLocal(index_slot), &stmt.span);
-                        self.emit(OpCode::Jump(start_label), &stmt.span);
+                        self.next_local = saved_next_local;
 
-                        let end_label = self.bytecode.len();
-                        self.bytecode[exit_jmp] = OpCode::JumpIfFalse(end_label);
+                        let cont_label = self.bytecode.len();
+                        self.emit(OpCode::IncLocal { reg: index_reg }, &stmt.span);
+                        self.emit(OpCode::Jump { target: start_label as u32 }, &stmt.span);
+
+                        let end_label = self.bytecode.len() as u32;
+                        if let OpCode::JumpIfFalse { ref mut target, .. } = self.bytecode[exit_jmp] {
+                            *target = end_label;
+                        }
+
                         let (_, breaks, continues, _) = self.loop_stack.pop().unwrap();
                         self.exit_scope();
-                        for b in breaks    { self.bytecode[b] = OpCode::Jump(end_label); }
-                        for c in continues { self.bytecode[c] = OpCode::Jump(cont_label); }
-                    }
-                    crate::parser::ast::ForIterType::Range => {
-                        self.compile_expr(start, ctx);
-                        let loop_var_slot = if let Some(s) = self.lookup_local(var_name) { s } else {
-                            let s = self.next_local;
-                            self.define_local(*var_name, s);
-                            self.next_local += 1;
-                            s
-                        };
-                        self.emit(OpCode::SetLocal(loop_var_slot), &stmt.span);
+                        for b in breaks {
+                            if let OpCode::Jump { ref mut target } = self.bytecode[b] { *target = end_label; }
+                        }
+                        for c in continues {
+                            if let OpCode::Jump { ref mut target } = self.bytecode[c] { *target = cont_label as u32; }
+                        }
 
+                        // Clean up – all registers up to set_reg are now unused
+                        self.next_local = set_reg as usize;
+                    }
+
+                    crate::parser::ast::ForIterType::Range => {
+                        let start_reg = self.compile_expr(start, ctx);
+                        // ✅ NOWY KOD
+                        let loop_var_reg = self.push_reg();  // ZAWSZE nowy rejestr!
+                        self.define_local(*var_name, loop_var_reg as usize);
+                        self.emit(OpCode::Move { dst: loop_var_reg, src: start_reg }, &stmt.span);
+                        let limit_reg = self.compile_expr(end, ctx);
+                        
                         let start_p = self.bytecode.len();
                         self.enter_scope();
                         self.loop_stack.push((start_p, Vec::new(), Vec::new(), None));
-
-                        // Condition: end >= var (i.e. var <= end)
-                        self.compile_expr(end, ctx);
-                        self.emit(OpCode::GetLocal(loop_var_slot), &stmt.span);
-                        self.emit(OpCode::GreaterEqual, &stmt.span);
+                        
+                        // Save the register state before loop body to prevent register corruption
+                        let saved_next_local = self.next_local;
+                        
+                        let test_reg = self.push_reg();
+                        self.emit(OpCode::LessEqual { dst: test_reg, src1: loop_var_reg, src2: limit_reg }, &stmt.span);
                         let exit_jmp = self.bytecode.len();
-                        self.emit(OpCode::JumpIfFalse(0), &stmt.span);
-
+                        self.emit(OpCode::JumpIfFalse { src: test_reg, target: 0 }, &stmt.span);
+                        self.pop_reg();
+                        
+                        let body_p = self.bytecode.len();
                         for s in body { self.compile_stmt(s, ctx); }
-
-                        // Increment
+                        
+                        // Restore register state to prevent temp registers from corrupting loop variables
+                        self.next_local = saved_next_local;
+                        
                         let cont_label = self.bytecode.len();
-                        self.bytecode.push(OpCode::GetLocal(loop_var_slot));
-                        if let Some(s) = step {
-                            self.compile_expr(s, ctx);
+                        if step.is_none() {
+                            let len = self.bytecode.len();
+                            let mut fused = false;
+                            if len > 0 {
+                                if let OpCode::IncVar { idx } = self.bytecode[len - 1] {
+                                    self.bytecode.pop();
+                                    self.spans.pop();
+                                    self.emit(OpCode::IncVarLoopNext { g_idx: idx, reg: loop_var_reg, limit_reg, target: body_p as u32 }, &stmt.span);
+                                    fused = true;
+                                }
+                            }
+                            if !fused {
+                                self.emit(OpCode::LoopNext { reg: loop_var_reg, limit_reg, target: body_p as u32 }, &stmt.span);
+                            }
                         } else {
-                            let one_idx = ctx.add_constant(Value::Int(1));
-                            self.bytecode.push(OpCode::Constant(one_idx));
+                            let step_reg = self.compile_expr(step.as_ref().unwrap(), ctx);
+                            self.emit(OpCode::Add { dst: loop_var_reg, src1: loop_var_reg, src2: step_reg }, &stmt.span);
+                            self.emit(OpCode::Jump { target: start_p as u32 }, &stmt.span);
+                            self.pop_reg();
                         }
-                        self.emit(OpCode::Add, &stmt.span);
-                        self.emit(OpCode::SetLocal(loop_var_slot), &stmt.span);
-                        self.emit(OpCode::Jump(start_p), &stmt.span);
-
-                        let end_p = self.bytecode.len();
-                        self.bytecode[exit_jmp] = OpCode::JumpIfFalse(end_p);
+                        
+                        let end_label = self.bytecode.len() as u32;
+                        if let OpCode::JumpIfFalse { ref mut target, .. } = self.bytecode[exit_jmp] {
+                            *target = end_label;
+                        }
+                        
                         let (_, breaks, continues, _) = self.loop_stack.pop().unwrap();
                         self.exit_scope();
-                        for idx in breaks    { self.bytecode[idx] = OpCode::Jump(end_p); }
-                        for idx in continues { self.bytecode[idx] = OpCode::Jump(cont_label); }
+                        for b in breaks {
+                            if let OpCode::Jump { ref mut target } = self.bytecode[b] { *target = end_label; }
+                        }
+                        for c in continues {
+                            if let OpCode::Jump { ref mut target } = self.bytecode[c] { *target = cont_label as u32; }
+                        }
+                        self.next_local = (loop_var_reg + 1) as usize;
                     }
                     crate::parser::ast::ForIterType::Fiber => {
-                        // Store fiber in a temp slot, then loop while !isDone()
-                        self.compile_expr(start, ctx);
-                        let fiber_slot = self.next_local;
-                        self.next_local += 1;
-                        self.emit(OpCode::SetLocal(fiber_slot), &stmt.span);
-
-                        let loop_var_slot = if let Some(s) = self.lookup_local(var_name) { s } else {
-                            let s = self.next_local;
-                            self.define_local(*var_name, s);
-                            self.next_local += 1;
-                            s
-                        };
-
+                        let fiber_reg = self.compile_expr(start, ctx);
+                        // ✅ NOWY KOD
+                        let loop_var_reg = self.push_reg();  // ZAWSZE nowy rejestr!
+                        self.define_local(*var_name, loop_var_reg as usize);
                         let start_label = self.bytecode.len();
                         self.enter_scope();
-                        self.loop_stack.push((start_label, Vec::new(), Vec::new(), Some(fiber_slot)));
-
-                        // Condition: !fiber.isDone()
-                        self.emit(OpCode::GetLocal(fiber_slot), &stmt.span);
-                        self.emit(OpCode::MethodCall(MethodKind::IsDone, 0), &stmt.span);
+                        self.loop_stack.push((start_label, Vec::new(), Vec::new(), Some(fiber_reg as usize)));
+                        
+                        // Save the register state before loop body to prevent register corruption
+                        let saved_next_local = self.next_local;
+                        
+                        let test_reg = self.push_reg();
+                        self.emit(OpCode::MethodCall { dst: test_reg, kind: MethodKind::IsDone, base: fiber_reg, arg_count: 0 }, &stmt.span);
                         let exit_jmp = self.bytecode.len();
-                        self.emit(OpCode::JumpIfTrue(0), &stmt.span);
-
-                        // Get next value (it's already been pre-loaded by FiberIsDone but wait, we need to call Next explicitly now)
-                        // Actually in the new VM, MethodKind::IsDone is just a check, it doesn't preload.
-                        // So we need to call Next.
-                        self.emit(OpCode::GetLocal(fiber_slot), &stmt.span);
-                        self.emit(OpCode::MethodCall(MethodKind::Next, 0), &stmt.span);
-                        self.emit(OpCode::SetLocal(loop_var_slot), &stmt.span);
-
+                        self.emit(OpCode::JumpIfTrue { src: test_reg, target: 0 }, &stmt.span);
+                        self.pop_reg();
+                        
+                        self.emit(OpCode::MethodCall { dst: loop_var_reg, kind: MethodKind::Next, base: fiber_reg, arg_count: 0 }, &stmt.span);
                         for s in body { self.compile_stmt(s, ctx); }
-
+                        
+                        // Restore register state to prevent temp registers from corrupting loop variables
+                        self.next_local = saved_next_local;
+                        
                         let cont_label = self.bytecode.len();
-                        self.emit(OpCode::Jump(start_label), &stmt.span);
-
-                        let end_label = self.bytecode.len();
-                        self.bytecode[exit_jmp] = OpCode::JumpIfTrue(end_label);
+                        self.emit(OpCode::Jump { target: start_label as u32 }, &stmt.span);
+                        
+                        let end_label = self.bytecode.len() as u32;
+                        if let OpCode::JumpIfTrue { ref mut target, .. } = self.bytecode[exit_jmp] {
+                            *target = end_label;
+                        }
+                        
                         let (_, breaks, continues, _) = self.loop_stack.pop().unwrap();
                         self.exit_scope();
-                        for b in breaks    { self.bytecode[b] = OpCode::Jump(end_label); }
-                        for c in continues { self.bytecode[c] = OpCode::Jump(cont_label); }
+                        for b in breaks {
+                            if let OpCode::Jump { ref mut target } = self.bytecode[b] { *target = end_label; }
+                        }
+                        for c in continues {
+                            if let OpCode::Jump { ref mut target } = self.bytecode[c] { *target = cont_label as u32; }
+                        }
+                        self.next_local = fiber_reg as usize;
                     }
                 }
             }
             crate::parser::ast::StmtKind::Break => {
-                // If we are in a fiber loop, emit FiberClose before jumping
-                if let Some(&(_, _, _, Some(fiber_slot))) = self.loop_stack.last() {
-                    self.emit(OpCode::GetLocal(fiber_slot), &stmt.span);
-                    self.emit(OpCode::MethodCall(MethodKind::Close, 0), &stmt.span);
+                if let Some(&(_, _, _, Some(fiber_reg_idx))) = self.loop_stack.last() {
+                    self.emit(OpCode::MethodCall { dst: 0, kind: MethodKind::Close, base: fiber_reg_idx as u8, arg_count: 0 }, &stmt.span);
                 }
                 let jmp = self.bytecode.len();
-                self.emit(OpCode::Jump(0), &stmt.span);
+                self.emit(OpCode::Jump { target: 0 }, &stmt.span);
                 if let Some(l) = self.loop_stack.last_mut() { l.1.push(jmp); }
             }
             crate::parser::ast::StmtKind::Continue => {
                 let jmp = self.bytecode.len();
-                self.emit(OpCode::Jump(0), &stmt.span);
+                self.emit(OpCode::Jump { target: 0 }, &stmt.span);
                 if let Some(l) = self.loop_stack.last_mut() { l.2.push(jmp); }
             }
             crate::parser::ast::StmtKind::ExprStmt(expr) => {
                 self.compile_expr(expr, ctx);
-                self.emit(OpCode::Pop, &stmt.span);
+                self.pop_reg();
             }
             crate::parser::ast::StmtKind::Halt { level, message } => {
-                self.compile_expr(message, ctx);
+                let src = self.compile_expr(message, ctx);
                 match level {
-                    crate::parser::ast::HaltLevel::Alert => self.emit(OpCode::HaltAlert, &stmt.span),
-                    crate::parser::ast::HaltLevel::Error => self.emit(OpCode::HaltError, &stmt.span),
-                    crate::parser::ast::HaltLevel::Fatal => self.emit(OpCode::HaltFatal, &stmt.span),
+                    crate::parser::ast::HaltLevel::Alert => self.emit(OpCode::HaltAlert { src }, &stmt.span),
+                    crate::parser::ast::HaltLevel::Error => self.emit(OpCode::HaltError { src }, &stmt.span),
+                    crate::parser::ast::HaltLevel::Fatal => self.emit(OpCode::HaltFatal { src }, &stmt.span),
                 }
+                self.pop_reg();
             }
             crate::parser::ast::StmtKind::Return(expr) => {
                 if let Some(e) = expr {
-                    self.compile_expr(e, ctx);
-                    self.emit(OpCode::Return, &stmt.span);
-                } else if self.has_return_type {
-                    self.emit(OpCode::Return, &stmt.span);
+                    let src = self.compile_expr(e, ctx);
+                    self.emit(OpCode::Return { src }, &stmt.span);
+                    self.pop_reg();
                 } else {
                     self.emit(OpCode::ReturnVoid, &stmt.span);
                 }
             }
-            crate::parser::ast::StmtKind::FunctionDef { name, params, body, return_type } => {
-                let mut fc = FunctionCompiler::new(false, Some(self.convert_to_flat_locals()));
-                fc.has_return_type = return_type.is_some();
+            crate::parser::ast::StmtKind::FunctionDef { name, params, body, .. } => {
+                let mut fc = FunctionCompiler::new(false, None);
                 for (i, (_, pname)) in params.iter().enumerate() {
                     fc.define_local(*pname, i);
                 }
                 fc.next_local = params.len();
                 for s in body { fc.compile_stmt(s, ctx); }
-                
+                if fc.bytecode.is_empty() || !matches!(fc.bytecode.last(), Some(OpCode::Return { .. }) | Some(OpCode::ReturnVoid)) {
+                    fc.emit(OpCode::ReturnVoid, &stmt.span);
+                }
                 let chunk = FunctionChunk {
                     bytecode: Arc::new(fc.bytecode),
                     spans: Arc::new(fc.spans),
                     is_fiber: false,
-                    max_locals: fc.next_local,
+                    max_locals: fc.max_locals_used.max(fc.next_local),
                 };
                 let fid = ctx.func_indices.get(name).copied().unwrap_or(0);
                 ctx.functions[fid] = chunk;
             }
-            crate::parser::ast::StmtKind::FiberDef { name, params, body, return_type } => {
-                let mut fc = FunctionCompiler::new(false, Some(self.convert_to_flat_locals()));
-                fc.has_return_type = return_type.is_some();
+            crate::parser::ast::StmtKind::FiberDef { name, params, body, .. } => {
+                let mut fc = FunctionCompiler::new(false, None);
                 for (i, (_, pname)) in params.iter().enumerate() {
                     fc.define_local(*pname, i);
                 }
                 fc.next_local = params.len();
                 for s in body { fc.compile_stmt(s, ctx); }
-                
+                if fc.bytecode.is_empty() || !matches!(fc.bytecode.last(), Some(OpCode::Return { .. }) | Some(OpCode::ReturnVoid)) {
+                    fc.emit(OpCode::ReturnVoid, &stmt.span);
+                }
                 let chunk = FunctionChunk {
                     bytecode: Arc::new(fc.bytecode),
                     spans: Arc::new(fc.spans),
                     is_fiber: true,
-                    max_locals: fc.next_local,
+                    max_locals: fc.max_locals_used.max(fc.next_local),
                 };
                 let fid = ctx.func_indices.get(name).copied().unwrap_or(0);
                 ctx.functions[fid] = chunk;
             }
             crate::parser::ast::StmtKind::FiberDecl { name, fiber_name, args, .. } => {
+                let base = self.next_local as u8;
                 for arg in args { self.compile_expr(arg, ctx); }
                 let f_idx = ctx.func_indices.get(fiber_name).copied().unwrap_or(0);
-                self.emit(OpCode::FiberCreate(f_idx, args.len()), &stmt.span);
-                let slot = if let Some(s) = self.lookup_local(name) { s } else {
-                    let s = self.next_local;
-                    self.define_local(*name, s);
-                    self.next_local += 1;
+                let dst = if let Some(s) = self.lookup_local(name) { s as u8 } else {
+                    let s = self.push_reg();
+                    self.define_local(*name, s as usize);
                     s
                 };
-                self.emit(OpCode::SetLocal(slot), &stmt.span);
+                self.emit(OpCode::FiberCreate { dst, func_idx: f_idx as u32, base, arg_count: args.len() as u8 }, &stmt.span);
+                self.next_local = (dst + 1) as usize;
             }
             crate::parser::ast::StmtKind::JsonBind { json, path, target } => {
-                self.compile_expr(json, ctx);
-                self.compile_expr(path, ctx);
+                let json_src = self.compile_expr(json, ctx);
+                let path_src = self.compile_expr(path, ctx);
                 if let Some(local_idx) = self.lookup_local(target) {
-                    self.emit(OpCode::JsonBindLocal(local_idx), &stmt.span);
+                    self.emit(OpCode::JsonBindLocal { dst: local_idx as u8, json_src, path_src }, &stmt.span);
                 } else {
                     let idx = ctx.globals.get(target).copied().unwrap_or(0);
-                    self.emit(OpCode::JsonBind(idx), &stmt.span);
+                    self.emit(OpCode::JsonBind { idx: idx as u32, json_src, path_src }, &stmt.span);
                 }
+                self.next_local = json_src as usize;
             }
             crate::parser::ast::StmtKind::JsonInject { json, mapping, table } => {
-                self.compile_expr(json, ctx);
-                self.compile_expr(mapping, ctx);
+                let json_src = self.compile_expr(json, ctx);
+                let mapping_src = self.compile_expr(mapping, ctx);
                 if let Some(local_idx) = self.lookup_local(table) {
-                    self.emit(OpCode::JsonInjectLocal(local_idx), &stmt.span);
+                    self.emit(OpCode::JsonInjectLocal { table_reg: local_idx as u8, json_src, mapping_src }, &stmt.span);
                 } else {
                     let idx = ctx.globals.get(table).copied().unwrap_or(0);
-                    self.emit(OpCode::JsonInject(idx), &stmt.span);
+                    self.emit(OpCode::JsonInject { table_idx: idx as u32, json_src, mapping_src }, &stmt.span);
                 }
+                self.next_local = json_src as usize;
             }
             crate::parser::ast::StmtKind::Yield(expr) => {
-                self.compile_expr(expr, ctx);
-                self.emit(OpCode::Yield, &stmt.span);
+                let src = self.compile_expr(expr, ctx);
+                self.emit(OpCode::Yield { src }, &stmt.span);
+                self.pop_reg();
             }
             crate::parser::ast::StmtKind::YieldFrom(expr) => {
-                self.compile_expr(expr, ctx);
-                let fiber_slot = self.next_local;
-                self.next_local += 1;
-                self.emit(OpCode::SetLocal(fiber_slot), &stmt.span);
-
+                let fiber_reg = self.compile_expr(expr, ctx);
                 let start_label = self.bytecode.len();
-
-                self.emit(OpCode::GetLocal(fiber_slot), &stmt.span);
-                self.emit(OpCode::MethodCall(MethodKind::IsDone, 0), &stmt.span);
+                let test_reg = self.push_reg();
+                self.emit(OpCode::MethodCall { dst: test_reg, kind: MethodKind::IsDone, base: fiber_reg, arg_count: 0 }, &stmt.span);
                 let exit_jmp = self.bytecode.len();
-                self.emit(OpCode::JumpIfTrue(0), &stmt.span);
+                self.emit(OpCode::JumpIfTrue { src: test_reg, target: 0 }, &stmt.span);
+                self.pop_reg();
 
-                self.emit(OpCode::GetLocal(fiber_slot), &stmt.span);
-                self.emit(OpCode::MethodCall(MethodKind::Next, 0), &stmt.span);
-                self.emit(OpCode::Yield, &stmt.span);
+                let val_reg = self.push_reg();
+                self.emit(OpCode::MethodCall { dst: val_reg, kind: MethodKind::Next, base: fiber_reg, arg_count: 0 }, &stmt.span);
+                
+                // If it just finished (isDone is true), it was a Return, so skip the Yield
+                let test_reg = self.push_reg();
+                self.emit(OpCode::MethodCall { dst: test_reg, kind: MethodKind::IsDone, base: fiber_reg, arg_count: 0 }, &stmt.span);
+                let skip_jmp = self.bytecode.len();
+                self.emit(OpCode::JumpIfTrue { src: test_reg, target: 0 }, &stmt.span);
+                self.pop_reg(); // test_reg
 
-                self.emit(OpCode::Jump(start_label), &stmt.span);
-
-                let end_label = self.bytecode.len();
-                self.bytecode[exit_jmp] = OpCode::JumpIfTrue(end_label);
+                self.emit(OpCode::Yield { src: val_reg }, &stmt.span);
+                
+                let skip_target = self.bytecode.len() as u32;
+                if let OpCode::JumpIfTrue { ref mut target, .. } = self.bytecode[skip_jmp] {
+                    *target = skip_target;
+                }
+                self.pop_reg(); // val_reg
+                
+                self.emit(OpCode::Jump { target: start_label as u32 }, &stmt.span);
+                let end_label = self.bytecode.len() as u32;
+                if let OpCode::JumpIfTrue { ref mut target, .. } = self.bytecode[exit_jmp] {
+                    *target = end_label;
+                }
+                self.next_local = fiber_reg as usize;
             }
+
             crate::parser::ast::StmtKind::YieldVoid => {
                 self.emit(OpCode::YieldVoid, &stmt.span);
             }
             crate::parser::ast::StmtKind::Wait(expr) => {
-                self.compile_expr(expr, ctx);
-                self.emit(OpCode::Wait, &stmt.span);
+                let src = self.compile_expr(expr, ctx);
+                self.emit(OpCode::Wait { src }, &stmt.span);
+                self.pop_reg();
             }
             crate::parser::ast::StmtKind::NetRequestStmt { method, url, headers, body, timeout, target } => {
-                // Build a map for HttpRequest
-                // { "method": method, "url": url, "headers": headers, "body": body, "timeout": timeout }
                 let mut elements = Vec::new();
                 elements.push((crate::parser::ast::Expr { kind: crate::parser::ast::ExprKind::StringLiteral(ctx.interner.intern("method")), span: crate::lexer::token::Span { line: 0, col: 0, len: 0 } }, *method.clone()));
                 elements.push((crate::parser::ast::Expr { kind: crate::parser::ast::ExprKind::StringLiteral(ctx.interner.intern("url")), span: crate::lexer::token::Span { line: 0, col: 0, len: 0 } }, *url.clone()));
@@ -1082,53 +1388,42 @@ impl FunctionCompiler {
                 if let Some(t) = timeout {
                     elements.push((crate::parser::ast::Expr { kind: crate::parser::ast::ExprKind::StringLiteral(ctx.interner.intern("timeout")), span: crate::lexer::token::Span { line: 0, col: 0, len: 0 } }, *t.clone()));
                 }
-                
                 let map_expr = crate::parser::ast::Expr {
-                    kind: crate::parser::ast::ExprKind::MapLiteral { 
+                    kind: crate::parser::ast::ExprKind::MapLiteral {
                         key_type: crate::parser::ast::Type::String,
                         value_type: crate::parser::ast::Type::Json,
-                        elements 
+                        elements,
                     },
                     span: crate::lexer::token::Span { line: 0, col: 0, len: 0 },
                 };
-                self.compile_expr(&map_expr, ctx);
-                self.emit(OpCode::HttpRequest, &stmt.span);
-                
-                // Set to target
-                if let Some(slot) = self.lookup_local(target) {
-                    self.emit(OpCode::SetLocal(slot), &stmt.span);
-                } else if let Some(&idx) = ctx.globals.get(target) {
-                    self.emit(OpCode::SetVar(idx), &stmt.span);
-                } else {
-                    // Implicit local if it's "as target"
-                    let slot = self.next_local;
-                    self.define_local(*target, slot);
+                let arg_src = self.compile_expr(&map_expr, ctx);
+                let dst = if let Some(slot) = self.lookup_local(target) { slot as u8 } else {
+                    let s = self.next_local;
+                    self.define_local(*target, s);
                     self.next_local += 1;
-                    self.emit(OpCode::SetLocal(slot), &stmt.span);
-                }
+                    s as u8
+                };
+                self.emit(OpCode::HttpRequest { dst, arg_src }, &stmt.span);
+                self.next_local = (dst + 1) as usize;
             }
             crate::parser::ast::StmtKind::Serve { name, port, host, workers, routes } => {
-                self.compile_expr(port, ctx);
-                if let Some(h) = host { self.compile_expr(h, ctx); }
-                else { let f = ctx.add_constant(Value::Bool(false)); self.emit(OpCode::Constant(f), &stmt.span); }
+                let port_src    = self.compile_expr(port, ctx);
+                let host_src    = if let Some(h) = host { self.compile_expr(h, ctx) } 
+                                  else { let i = ctx.add_constant(Value::from_bool(false)); let r = self.push_reg(); self.emit(OpCode::LoadConst { dst: r, idx: i }, &stmt.span); r };
+                let workers_src = if let Some(w) = workers { self.compile_expr(w, ctx) } 
+                                  else { let i = ctx.add_constant(Value::from_bool(false)); let r = self.push_reg(); self.emit(OpCode::LoadConst { dst: r, idx: i }, &stmt.span); r };
+                let routes_src  = self.compile_expr(routes, ctx);
                 
-                if let Some(w) = workers { self.compile_expr(w, ctx); }
-                else { let f = ctx.add_constant(Value::Bool(false)); self.emit(OpCode::Constant(f), &stmt.span); }
-                
-                self.compile_expr(routes, ctx);
-                
-                let s_name = ctx.interner.lookup(*name).to_string();
-                let ni = ctx.add_constant(Value::String(s_name));
-                self.emit(OpCode::HttpServe(ni), &stmt.span);
+                let func_idx = ctx.func_indices.get(name).copied().unwrap_or(0);
+                self.emit(OpCode::HttpServe { func_idx: func_idx as u32, port_src, host_src, workers_src, routes_src }, &stmt.span);
+                self.next_local = port_src as usize;
             }
             crate::parser::ast::StmtKind::Include { .. } => {
-                // Handled in the pre-processor/expander pass
+                // Handled in pre-processor
             }
         }
     }
 }
-
-// ── first pass helper ────────────────────────────────────────────────────────
 
 fn register_globals_recursive(
     stmts: &[Stmt],
@@ -1148,8 +1443,6 @@ fn register_globals_recursive(
                     is_fiber: false,
                     max_locals: 0,
                 });
-                // Recurse into function body to find nested functions/fibers
-                // but mark as NOT main script so nested VarDecls become locals.
                 register_globals_recursive(body, globals, func_indices, functions, false);
             }
             crate::parser::ast::StmtKind::FiberDef { name, body, .. } => {
@@ -1211,105 +1504,80 @@ impl Compiler {
         }
     }
 
-    pub fn compile(
-        &mut self,
-        program: &crate::parser::ast::Program,
-        interner: &mut Interner,
-    ) -> (FunctionChunk, Arc<Vec<Value>>, Arc<Vec<FunctionChunk>>) {
-        // ── First pass: register built-in and user symbols ────────────────────
+    pub fn compile(&mut self, program: &crate::parser::ast::Program, interner: &mut Interner) -> (FunctionChunk, Arc<Vec<Value>>, Arc<Vec<FunctionChunk>>) {
         let built_ins = ["json", "date", "random", "store"];
         for (i, name) in built_ins.iter().enumerate() {
             let id = interner.intern(name);
             self.globals.insert(id, i);
         }
-
         register_globals_recursive(&program.stmts, &mut self.globals, &mut self.func_indices, &mut self.functions, true);
-
-        // ── Build compile context ─────────────────────────────────────────────
         let mut ctx = CompileContext {
-            constants:    &mut self.constants,
+            constants: &mut self.constants,
             string_constants: &mut self.string_constants,
-            functions:    &mut self.functions,
+            functions: &mut self.functions,
             func_indices: &self.func_indices,
-            globals:      &self.globals,
+            globals: &self.globals,
             interner,
         };
-
         let mut main_compiler = FunctionCompiler::new(true, None);
-
-        // Init built-in global slots (0:json, 1:date, 2:random, 3:store)
         let dummy_span = crate::lexer::token::Span { line: 0, col: 0, len: 0 };
         for (i, name) in ["json", "date", "random", "store"].iter().enumerate() {
-            let val = ctx.add_constant(Value::String(name.to_string()));
-            main_compiler.emit(OpCode::Constant(val), &dummy_span);
-            main_compiler.emit(OpCode::SetVar(i), &dummy_span);
+            let val = ctx.add_constant(Value::from_string(name.to_string().into()));
+            let dst = main_compiler.push_reg();
+            main_compiler.emit(OpCode::LoadConst { dst, idx: val }, &dummy_span);
+            main_compiler.emit(OpCode::SetVar { idx: i as u32, src: dst }, &dummy_span);
+            main_compiler.pop_reg();
         }
-
-        // ── Second pass: compile all stmts ────────────────────────────────────
         for stmt in &program.stmts {
             match &stmt.kind {
-                crate::parser::ast::StmtKind::FunctionDef { name, params, return_type, body } => {
+                crate::parser::ast::StmtKind::FunctionDef { name, params, body, .. } => {
                     let fid = *self.func_indices.get(name).unwrap();
-                    let chunk = compile_function_helper(
-                        params, body, return_type.is_some(), false, &mut ctx,
-                    );
+                    let chunk = compile_function_helper(params, body, false, &mut ctx);
                     ctx.functions[fid] = chunk;
                 }
                 crate::parser::ast::StmtKind::FiberDef { name, params, body, .. } => {
                     let fid = *self.func_indices.get(name).unwrap();
-                    let chunk = compile_function_helper(
-                        params, body, true, true, &mut ctx,
-                    );
+                    let chunk = compile_function_helper(params, body, true, &mut ctx);
                     ctx.functions[fid] = chunk;
                 }
                 _ => main_compiler.compile_stmt(stmt, &mut ctx),
             }
         }
-
         main_compiler.emit(OpCode::Halt, &dummy_span);
         let main_chunk = FunctionChunk {
             bytecode: Arc::new(main_compiler.bytecode),
             spans: Arc::new(main_compiler.spans),
             is_fiber: false,
-            max_locals: main_compiler.next_local,
+            max_locals: main_compiler.max_locals_used.max(main_compiler.next_local),
         };
         (main_chunk, Arc::new(std::mem::take(&mut self.constants)), Arc::new(std::mem::take(&mut self.functions)))
     }
 }
 
-// ── function / fiber helper ───────────────────────────────────────────────────
-
 fn compile_function_helper(
     params: &[(crate::parser::ast::Type, StringId)],
     body: &[Stmt],
-    has_return_type: bool,
     is_fiber: bool,
     ctx: &mut CompileContext,
 ) -> FunctionChunk {
     let mut compiler = FunctionCompiler::new(false, None);
-    compiler.has_return_type = has_return_type;
-
     for (i, (_, param_name)) in params.iter().enumerate() {
         compiler.define_local(*param_name, i);
     }
     compiler.next_local = params.len();
-
     for s in body {
         compiler.compile_stmt(s, ctx);
     }
-
-    // Ensure a terminal return opcode exists
     if !compiler.bytecode.last().map_or(false, |op| {
-        matches!(op, OpCode::Return | OpCode::ReturnVoid)
+        matches!(op, OpCode::Return { .. } | OpCode::ReturnVoid)
     }) {
         let dummy_span = crate::lexer::token::Span { line: 0, col: 0, len: 0 };
         compiler.emit(OpCode::ReturnVoid, &dummy_span);
     }
-
     FunctionChunk {
         bytecode: Arc::new(compiler.bytecode),
         spans: Arc::new(compiler.spans),
         is_fiber,
-        max_locals: compiler.next_local,
+        max_locals: compiler.max_locals_used.max(compiler.next_local),
     }
 }

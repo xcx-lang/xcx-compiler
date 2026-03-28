@@ -1,0 +1,63 @@
+--- test_std_lib.xcx
+--- Crypto, Store, Env, Date
+
+>! "Running test_std_lib.xcx...";
+
+--- 1. Crypto
+s: pw_val = "secret";
+s: b_hash_val = crypto.hash(pw_val, "bcrypt");
+if (NOT crypto.verify(pw_val, b_hash_val, "bcrypt")) then; halt.error >! "Crypto Bcrypt failed"; end;
+
+s: a_hash_val = crypto.hash(pw_val, "argon2");
+if (NOT crypto.verify(pw_val, a_hash_val, "argon2")) then; halt.error >! "Crypto Argon2 failed"; end;
+
+s: tok_val = crypto.token(32);
+if (tok_val.length != 32 AND tok_val.length != 64) then; 
+    halt.error >! "Crypto token length failed, got: " + s(tok_val.length); 
+end;
+
+--- 2. Store
+--- Using a unique path to avoid collisions
+s: test_path = "tests/test_data_std.txt";
+store.write(test_path, "XCX");
+if (NOT store.exists(test_path)) then; halt.error >! "Store write/exists failed"; end;
+
+s: read_str = store.read(test_path);
+if (read_str != "XCX") then; halt.error >! "Store read failed"; end;
+
+store.append(test_path, " 2.2");
+if (store.read(test_path) != "XCX 2.2") then; halt.error >! "Store append failed"; end;
+
+store.delete(test_path);
+if (store.exists(test_path)) then; halt.error >! "Store delete failed"; end;
+
+--- 3. Env
+--- USERNAME on Windows
+s: env_user = env.get("USERNAME");
+if (env_user == "") then; halt.error >! "Env get failed"; end;
+
+array:s: args_sys = env.args();
+if (args_sys.size() < 1) then; halt.error >! "Env args failed"; end;
+
+--- 4. Date
+date: dt_now = date.now();
+if (dt_now.year < 2024) then; halt.error >! "Date now (year) failed"; end;
+
+date: dt_fixed = date("2024-01-01");
+if (dt_fixed.year != 2024 OR dt_fixed.month != 1 OR dt_fixed.day != 1) then; halt.error >! "Date creation failed"; end;
+
+date: dt_tomorrow = dt_fixed + 1;
+if (dt_tomorrow.day != 2) then; halt.error >! "Date arithmetic (+) failed"; end;
+
+i: dt_diff = dt_tomorrow - dt_fixed;
+if (dt_diff != 1) then; halt.error >! "Date arithmetic (-) failed"; end;
+
+
+
+
+if (NOT (dt_fixed < dt_tomorrow)) then; halt.error >! "Date comparison failed"; end;
+
+s: dt_fmt = dt_fixed.format("YYYY");
+if (dt_fmt != "2024") then; halt.error >! "Date format failed"; end;
+
+>! "test_std_lib.xcx passed.";

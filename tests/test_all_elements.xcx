@@ -1,0 +1,1104 @@
+--- XCX 2.2 FULL ELEMENT COVERAGE TEST SUITE
+--- Covers: types, variables, constants, operators, control flow,
+---         functions, fibers, collections, dates, json, http client,
+---         std lib (crypto, store, env, random), string methods, i/o
+
+func run_assert(b: condition, s: label) {
+    if (condition) then;
+        >! "  OK: " + label;
+    else;
+        halt.error >! "  FAIL: " + label;
+    end;
+};
+
+func run_assert_eq_i(i: actual, i: expected, s: label) {
+    if (actual == expected) then;
+        >! "  OK: " + label;
+    else;
+        halt.error >! "  FAIL: " + label + " | got: " + s(actual) + " expected: " + s(expected);
+    end;
+};
+
+func run_assert_eq_s(s: actual, s: expected, s: label) {
+    if (actual == expected) then;
+        >! "  OK: " + label;
+    else;
+        halt.error >! "  FAIL: " + label + " | got: " + actual + " expected: " + expected;
+    end;
+};
+
+func run_assert_eq_f(f: actual, f: expected, s: label) {
+    if (actual == expected) then;
+        >! "  OK: " + label;
+    else;
+        halt.error >! "  FAIL: " + label;
+    end;
+};
+
+--- ============================================================
+--- SECTION 1: SIMPLE TYPES AND DEFAULT VALUES
+--- ============================================================
+>! "";
+>! "=== SECTION 1: SIMPLE TYPES AND DEFAULT VALUES ===";
+
+i: sv_int;
+f: sv_float;
+s: sv_str;
+b: sv_bool;
+
+run_assert_eq_i(sv_int, 0, "default int is 0");
+run_assert_eq_f(sv_float, 0.0, "default float is 0.0");
+run_assert_eq_s(sv_str, "", "default string is empty");
+run_assert(sv_bool == false, "default bool is false");
+
+i: tv_int   = 42;
+f: tv_float = 3.14;
+s: tv_str   = "hello";
+b: tv_bool  = true;
+
+run_assert_eq_i(tv_int, 42, "int literal 42");
+run_assert_eq_f(tv_float, 3.14, "float literal 3.14");
+run_assert_eq_s(tv_str, "hello", "string literal hello");
+run_assert(tv_bool == true, "bool literal true");
+
+--- negative values
+i: neg_int   = -7;
+f: neg_float = -0.5;
+
+run_assert_eq_i(neg_int, -7, "negative int -7");
+run_assert_eq_f(neg_float, -0.5, "negative float -0.5");
+
+--- ============================================================
+--- SECTION 2: CONSTANTS
+--- ============================================================
+>! "";
+>! "=== SECTION 2: CONSTANTS ===";
+
+const i: CONST_MAX   = 1024;
+const s: CONST_VER   = "2.2.0";
+const f: CONST_PI    = 3.14159;
+const b: CONST_FLAG  = true;
+
+run_assert_eq_i(CONST_MAX, 1024, "const int 1024");
+run_assert_eq_s(CONST_VER, "2.2.0", "const string 2.2.0");
+run_assert(CONST_PI > 3.14, "const float pi > 3.14");
+run_assert(CONST_FLAG == true, "const bool true");
+
+--- ============================================================
+--- SECTION 3: ARITHMETIC OPERATORS
+--- ============================================================
+>! "";
+>! "=== SECTION 3: ARITHMETIC OPERATORS ===";
+
+i: ao_a = 10;
+i: ao_b = 3;
+
+run_assert_eq_i(ao_a + ao_b, 13,   "10 + 3 = 13");
+run_assert_eq_i(ao_a - ao_b, 7,    "10 - 3 = 7");
+run_assert_eq_i(ao_a * ao_b, 30,   "10 * 3 = 30");
+run_assert_eq_i(ao_a / ao_b, 3,    "10 / 3 = 3 (truncate)");
+run_assert_eq_i(ao_a % ao_b, 1,    "10 % 3 = 1");
+run_assert_eq_i(2 ^ 10, 1024,      "2 ^ 10 = 1024");
+run_assert_eq_i(48 ++ 77, 4877,    "48 ++ 77 = 4877");
+
+--- unary negation
+i: unary_neg = -ao_a;
+run_assert_eq_i(unary_neg, -10, "unary negation -10");
+
+--- float arithmetic
+f: fa = 1.5;
+f: fb = 0.5;
+run_assert_eq_f(fa + fb, 2.0, "1.5 + 0.5 = 2.0");
+run_assert_eq_f(fa - fb, 1.0, "1.5 - 0.5 = 1.0");
+run_assert_eq_f(fa * fb, 0.75, "1.5 * 0.5 = 0.75");
+
+--- ============================================================
+--- SECTION 4: COMPARISON OPERATORS
+--- ============================================================
+>! "";
+>! "=== SECTION 4: COMPARISON OPERATORS ===";
+
+i: co_x = 5;
+i: co_y = 10;
+
+run_assert(co_x == 5,       "5 == 5");
+run_assert(co_x != co_y,    "5 != 10");
+run_assert(co_x < co_y,     "5 < 10");
+run_assert(co_y > co_x,     "10 > 5");
+run_assert(co_x <= 5,       "5 <= 5");
+run_assert(co_y >= 10,      "10 >= 10");
+run_assert(NOT (co_x > co_y), "NOT 5 > 10");
+
+--- ============================================================
+--- SECTION 5: LOGICAL OPERATORS
+--- ============================================================
+>! "";
+>! "=== SECTION 5: LOGICAL OPERATORS ===";
+
+b: lo_t = true;
+b: lo_f = false;
+
+run_assert(lo_t AND lo_t,    "true AND true");
+run_assert(NOT (lo_t AND lo_f), "NOT (true AND false)");
+run_assert(lo_t OR lo_f,     "true OR false");
+run_assert(NOT lo_f,         "NOT false");
+run_assert(NOT NOT lo_t,     "NOT NOT true == true");
+
+--- aliases
+run_assert(lo_t && lo_t,    "true && true");
+run_assert(lo_t || lo_f,    "true || false");
+run_assert(!! lo_f,         "!! false == true");
+
+--- ============================================================
+--- SECTION 6: STRING OPERATORS AND METHODS
+--- ============================================================
+>! "";
+>! "=== SECTION 6: STRING OPERATORS AND METHODS ===";
+
+s: sm_base   = "  XCX-Language  ";
+s: sm_concat = "Hello" + " " + "World";
+
+run_assert_eq_s(sm_concat, "Hello World", "string concat");
+run_assert("Search" HAS "ear", "HAS substring true");
+run_assert(NOT ("Search" HAS "xyz"), "HAS substring false");
+
+--- auto-convert to string
+s: sm_numstr = "Value: " + 42;
+run_assert_eq_s(sm_numstr, "Value: 42", "int to string concat");
+
+--- length property
+run_assert_eq_i("hello".length, 5, "length 5");
+run_assert_eq_i("".length, 0, "empty length 0");
+
+--- methods
+s: sm_trimmed  = sm_base.trim();
+s: sm_upper    = "hello".upper();
+s: sm_lower    = "HELLO".lower();
+s: sm_replaced = "a-b-c".replace("-", "_");
+s: sm_sliced   = "Programming".slice(0, 4);
+i: sm_idx      = "Programming".indexOf("gram");
+b: sm_starts   = "Hello".startsWith("He");
+b: sm_ends     = "Hello".endsWith("lo");
+i: sm_parsed_i = "25".toInt();
+f: sm_parsed_f = "3.5".toFloat();
+
+run_assert_eq_s(sm_trimmed, "XCX-Language", "trim");
+run_assert_eq_s(sm_upper, "HELLO", "upper");
+run_assert_eq_s(sm_lower, "hello", "lower");
+run_assert_eq_s(sm_replaced, "a_b_c", "replace");
+run_assert_eq_s(sm_sliced, "Prog", "slice 0..4");
+run_assert_eq_i(sm_idx, 3, "indexOf gram = 3");
+run_assert(sm_starts, "startsWith He");
+run_assert(sm_ends, "endsWith lo");
+run_assert_eq_i(sm_parsed_i, 25, "toInt 25");
+run_assert_eq_f(sm_parsed_f, 3.5, "toFloat 3.5");
+
+--- lastIndexOf
+i: li_idx = "abcabc".lastIndexOf("a");
+run_assert_eq_i(li_idx, 3, "lastIndexOf a = 3");
+
+--- ============================================================
+--- SECTION 7: TYPE CASTING
+--- ============================================================
+>! "";
+>! "=== SECTION 7: TYPE CASTING ===";
+
+f: tc_float = 3.7;
+i: tc_int   = i(tc_float);
+run_assert_eq_i(tc_int, 3, "f to i truncate 3.7 -> 3");
+
+i: tc_m = 42;
+f: tc_y = f(tc_m);
+run_assert_eq_f(tc_y, 42.0, "i to f 42 -> 42.0");
+
+i: tc_num = 99;
+s: tc_str = s(tc_num);
+run_assert_eq_s(tc_str, "99", "i to s 99 -> \"99\"");
+
+--- ============================================================
+--- SECTION 8: VARIABLE REASSIGNMENT
+--- ============================================================
+>! "";
+>! "=== SECTION 8: VARIABLE REASSIGNMENT ===";
+
+i: ra_counter = 0;
+ra_counter = ra_counter + 1;
+ra_counter = ra_counter + 1;
+run_assert_eq_i(ra_counter, 2, "counter reassign to 2");
+
+s: ra_name = "Alice";
+ra_name = "Bob";
+run_assert_eq_s(ra_name, "Bob", "string reassign Alice->Bob");
+
+--- ============================================================
+--- SECTION 9: IF / ELSEIF / ELSE
+--- ============================================================
+>! "";
+>! "=== SECTION 9: IF / ELSEIF / ELSE ===";
+
+i: if_score = 75;
+s: if_grade;
+
+if (if_score >= 90) then;
+    if_grade = "A";
+elif (if_score >= 75) then;
+    if_grade = "B";
+elf (if_score >= 60) then;
+    if_grade = "C";
+els;
+    if_grade = "F";
+end;
+
+run_assert_eq_s(if_grade, "B", "if/elif/elf/els grade B");
+
+--- nested if
+i: nest_val = 5;
+b: nest_result = false;
+
+if (nest_val > 0) then;
+    if (nest_val < 10) then;
+        nest_result = true;
+    end;
+end;
+
+run_assert(nest_result, "nested if both true");
+
+--- ============================================================
+--- SECTION 10: WHILE LOOP
+--- ============================================================
+>! "";
+>! "=== SECTION 10: WHILE LOOP ===";
+
+i: wl_cnt  = 0;
+i: wl_sum  = 0;
+
+while (wl_cnt < 5) do;
+    wl_cnt = wl_cnt + 1;
+    wl_sum = wl_sum + wl_cnt;
+end;
+
+run_assert_eq_i(wl_cnt, 5,  "while cnt = 5");
+run_assert_eq_i(wl_sum, 15, "while sum 1..5 = 15");
+
+--- ============================================================
+--- SECTION 11: FOR RANGE LOOP
+--- ============================================================
+>! "";
+>! "=== SECTION 11: FOR RANGE LOOP ===";
+
+i: fr_total = 0;
+for fr_i in 1 to 5 do;
+    fr_total = fr_total + fr_i;
+end;
+
+run_assert_eq_i(fr_total, 15, "for range 1..5 sum = 15");
+
+--- stepped for
+i: step_total = 0;
+for st_j in 0 to 6 @step 2 do;
+    step_total = step_total + st_j;
+end;
+run_assert_eq_i(step_total, 12, "for step 2: 0+2+4+6 = 12");
+
+--- ============================================================
+--- SECTION 12: BREAK AND CONTINUE
+--- ============================================================
+>! "";
+>! "=== SECTION 12: BREAK AND CONTINUE ===";
+
+i: bc_sum = 0;
+for bc_n in 1 to 10 do;
+    if (bc_n == 6) then; break; end;
+    bc_sum = bc_sum + bc_n;
+end;
+run_assert_eq_i(bc_sum, 15, "break at 6: sum 1..5 = 15");
+
+i: cont_sum = 0;
+for cn_n in 1 to 5 do;
+    if (cn_n % 2 == 0) then; continue; end;
+    cont_sum = cont_sum + cn_n;
+end;
+run_assert_eq_i(cont_sum, 9, "continue skip evens: 1+3+5 = 9");
+
+--- ============================================================
+--- SECTION 13: FUNCTIONS
+--- ============================================================
+>! "";
+>! "=== SECTION 13: FUNCTIONS ===";
+
+func fn_add(i: fn_x, i: fn_y -> i) {
+    return fn_x + fn_y;
+};
+
+func fn_greet(s: fn_who) {
+    >! "Hello " + fn_who;
+};
+
+func fn_get_pi(-> f) {
+    return 3.14159;
+};
+
+func fn_factorial(i: fn_n -> i) {
+    if (fn_n <= 1) then;
+        return 1;
+    else;
+        return fn_n * fn_factorial(fn_n - 1);
+    end;
+};
+
+run_assert_eq_i(fn_add(3, 4), 7,   "fn add(3,4) = 7");
+run_assert(fn_get_pi() > 3.14,     "fn get_pi > 3.14");
+run_assert_eq_i(fn_factorial(5), 120, "fn factorial(5) = 120");
+fn_greet("World");
+
+--- ============================================================
+--- SECTION 14: FIBERS - TYPED
+--- ============================================================
+>! "";
+>! "=== SECTION 14: FIBERS - TYPED ===";
+
+fiber fb_counter(i: fb_max -> i) {
+    for fb_ci in 1 to fb_max do;
+        yield fb_ci;
+    end;
+    return 0;
+};
+
+fiber:i: fb_gen = fb_counter(3);
+
+i: fb_v1 = fb_gen.next();
+i: fb_v2 = fb_gen.next();
+i: fb_v3 = fb_gen.next();
+
+run_assert_eq_i(fb_v1, 1, "fiber first yield = 1");
+run_assert_eq_i(fb_v2, 2, "fiber second yield = 2");
+run_assert_eq_i(fb_v3, 3, "fiber third yield = 3");
+run_assert(NOT fb_gen.isDone(), "fiber not done yet");
+i: fb_v4 = fb_gen.next();
+run_assert(fb_gen.isDone(), "fiber isDone after exhausted");
+
+--- fiber iteration with for loop
+i: fb_sum = 0;
+fiber:i: fb_gen2 = fb_counter(5);
+for fb_val in fb_gen2 do;
+    fb_sum = fb_sum + fb_val;
+end;
+run_assert_eq_i(fb_sum, 15, "fiber for loop sum 1..5 = 15");
+
+--- ============================================================
+--- SECTION 15: FIBERS - VOID
+--- ============================================================
+>! "";
+>! "=== SECTION 15: FIBERS - VOID ===";
+
+fiber fb_void_printer(s: fb_msg) {
+    >! "void fiber: " + fb_msg;
+    yield;
+    >! "void fiber done";
+};
+
+fiber: fb_void = fb_void_printer("test");
+b: fb_run1 = fb_void.run();
+run_assert(fb_run1, "void fiber run returns true");
+run_assert(NOT fb_void.isDone(), "void fiber not done after 1 step");
+fb_void.run();
+run_assert(fb_void.isDone(), "void fiber done after 2nd run");
+
+--- ============================================================
+--- SECTION 16: FIBERS - YIELD FROM
+--- ============================================================
+>! "";
+>! "=== SECTION 16: FIBERS - YIELD FROM ===";
+
+fiber yf_base(i: yf_n -> i) {
+    for yf_i in 1 to yf_n do;
+        yield yf_i;
+    end;
+    return 0;
+};
+
+fiber yf_delegator(-> i) {
+    fiber:i: yf_sub = yf_base(3);
+    yield from yf_sub;
+    yield 100;
+    return 0;
+};
+
+fiber:i: yf_d = yf_delegator();
+i: yfd_a = yf_d.next();
+i: yfd_b = yf_d.next();
+i: yfd_c = yf_d.next();
+i: yfd_d = yf_d.next();
+
+run_assert_eq_i(yfd_a, 1,   "yield from: 1st = 1");
+run_assert_eq_i(yfd_b, 2,   "yield from: 2nd = 2");
+run_assert_eq_i(yfd_c, 3,   "yield from: 3rd = 3");
+run_assert_eq_i(yfd_d, 100, "yield from: 4th = 100");
+
+--- ============================================================
+--- SECTION 17: FIBER CLOSE
+--- ============================================================
+>! "";
+>! "=== SECTION 17: FIBER CLOSE ===";
+
+fiber fc_gen(-> i) {
+    yield 1;
+    yield 2;
+    yield 3;
+    return 0;
+};
+
+fiber:i: fc_f = fc_gen();
+fc_f.next();
+fc_f.close();
+run_assert(fc_f.isDone(), "fiber close -> isDone");
+
+--- break in for loop auto-closes fiber
+fiber fc_gen2(-> i) {
+    yield 10;
+    yield 20;
+    yield 30;
+    return 0;
+};
+
+fiber:i: fc_f2 = fc_gen2();
+for fc_v in fc_f2 do;
+    if (fc_v == 10) then; break; end;
+end;
+run_assert(fc_f2.isDone(), "break in for auto-closes fiber");
+
+--- ============================================================
+--- SECTION 18: ARRAYS
+--- ============================================================
+>! "";
+>! "=== SECTION 18: ARRAYS ===";
+
+array:i: ar_nums {5, 2, 8, 1, 9};
+
+run_assert_eq_i(ar_nums.size(), 5,   "array size = 5");
+run_assert_eq_i(ar_nums.get(0), 5,   "array get(0) = 5");
+run_assert_eq_i(ar_nums.get(4), 9,   "array get(4) = 9");
+run_assert(ar_nums.contains(8),      "array contains 8");
+run_assert(NOT ar_nums.contains(99), "array not contains 99");
+run_assert_eq_i(ar_nums.find(8), 2,  "array find(8) = 2");
+run_assert_eq_i(ar_nums.find(99), -1,"array find(99) = -1");
+run_assert(NOT ar_nums.isEmpty(),    "array not empty");
+
+ar_nums.push(42);
+run_assert_eq_i(ar_nums.size(), 6,   "array push -> size 6");
+run_assert_eq_i(ar_nums.get(5), 42,  "array push -> get(5) = 42");
+
+i: ar_popped = ar_nums.pop();
+run_assert_eq_i(ar_popped, 42,       "array pop = 42");
+run_assert_eq_i(ar_nums.size(), 5,   "array pop -> size 5");
+
+ar_nums.insert(0, 99);
+run_assert_eq_i(ar_nums.get(0), 99,  "array insert at 0 = 99");
+
+ar_nums.update(0, 77);
+run_assert_eq_i(ar_nums.get(0), 77,  "array update(0,77)");
+
+ar_nums.delete(0);
+run_assert_eq_i(ar_nums.size(), 5,   "array delete(0) -> size 5");
+
+ar_nums.sort();
+i: ar_s0 = ar_nums.get(0);
+run_assert(ar_s0 <= ar_nums.get(1),  "array sorted ascending");
+
+ar_nums.reverse();
+i: ar_r0 = ar_nums.get(0);
+run_assert(ar_r0 >= ar_nums.get(1),  "array reversed descending");
+
+--- clear
+array:i: ar_clear {1, 2, 3};
+ar_clear.clear();
+run_assert(ar_clear.isEmpty(), "array clear -> isEmpty");
+
+--- for loop over array
+i: ar_iter_sum = 0;
+array:i: ar_iter {10, 20, 30};
+for ar_el in ar_iter do;
+    ar_iter_sum = ar_iter_sum + ar_el;
+end;
+run_assert_eq_i(ar_iter_sum, 60, "array for loop sum = 60");
+
+--- string array
+array:s: ar_strs {"alpha", "beta", "gamma"};
+run_assert_eq_s(ar_strs.get(1), "beta", "string array get(1) = beta");
+
+--- ============================================================
+--- SECTION 19: SETS
+--- ============================================================
+>! "";
+>! "=== SECTION 19: SETS ===";
+
+set:N: st_small {1,,5};
+run_assert_eq_i(st_small.size(), 5, "set range 1..5 size = 5");
+run_assert(st_small.contains(3),    "set contains 3");
+run_assert(NOT st_small.contains(6),"set not contains 6");
+run_assert(NOT st_small.isEmpty(),  "set not empty");
+
+--- explicit values and deduplication
+set:Z: st_dedup {1, 2, 2, 3, 3, 3};
+run_assert_eq_i(st_dedup.size(), 3, "set dedup size = 3");
+
+--- add and remove
+set:N: st_mutable {10, 20, 30};
+st_mutable.add(40);
+run_assert(st_mutable.contains(40), "set add 40");
+st_mutable.remove(10);
+run_assert(NOT st_mutable.contains(10), "set remove 10");
+
+--- clear
+st_mutable.clear();
+run_assert(st_mutable.isEmpty(), "set clear -> isEmpty");
+
+--- set operations
+set:N: st_a {1,,5};
+set:N: st_b {3,,7};
+
+set:N: st_union   = st_a UNION st_b;
+set:N: st_inter   = st_a INTERSECTION st_b;
+set:N: st_diff    = st_a DIFFERENCE st_b;
+set:N: st_sym     = st_a SYMMETRIC_DIFFERENCE st_b;
+
+run_assert_eq_i(st_union.size(), 7,   "UNION size = 7");
+run_assert_eq_i(st_inter.size(), 3,   "INTERSECTION {3,4,5} size = 3");
+run_assert_eq_i(st_diff.size(), 2,    "DIFFERENCE {1,2} size = 2");
+run_assert_eq_i(st_sym.size(), 4,     "SYM_DIFF {1,2,6,7} size = 4");
+
+--- Unicode operators
+set:N: su_a {1,,3};
+set:N: su_b {2,,4};
+set:N: su_union = su_a ∪ su_b;
+run_assert_eq_i(su_union.size(), 4, "unicode UNION size = 4");
+
+--- string set
+set:S: st_words {"apple", "banana", "cherry"};
+run_assert(st_words.contains("banana"), "string set contains banana");
+
+--- boolean set
+set:B: st_bools {true, false};
+run_assert_eq_i(st_bools.size(), 2, "bool set size = 2");
+
+--- rational set with step
+set:Q: st_halves {0.0,,1.0 @step 0.5};
+run_assert(st_halves.contains(0.5), "Q set step 0.5 contains 0.5");
+
+--- for loop over set
+i: st_sum = 0;
+set:N: st_iter_set {1,,4};
+for st_p in st_iter_set do;
+    st_sum = st_sum + st_p;
+end;
+run_assert_eq_i(st_sum, 10, "set for loop 1+2+3+4 = 10");
+
+--- random.choice from set
+set:N: rnd_pool {1,,100};
+i: rnd_picked = random.choice from rnd_pool;
+run_assert(rnd_picked >= 1 AND rnd_picked <= 100, "random.choice in range 1..100");
+
+--- ============================================================
+--- SECTION 20: MAPS
+--- ============================================================
+>! "";
+>! "=== SECTION 20: MAPS ===";
+
+map: mp_ages {
+    schema = [s <-> i]
+    data = ["alice" :: 30, "bob" :: 25]
+};
+
+run_assert_eq_i(mp_ages.size(), 2, "map size = 2");
+run_assert(mp_ages.contains("alice"), "map contains alice");
+run_assert(NOT mp_ages.contains("carol"), "map not contains carol");
+run_assert_eq_i(mp_ages.get("alice"), 30, "map get alice = 30");
+
+mp_ages.insert("carol", 28);
+run_assert_eq_i(mp_ages.size(), 3, "map insert -> size 3");
+run_assert_eq_i(mp_ages.get("carol"), 28, "map get carol = 28");
+
+mp_ages.remove("bob");
+run_assert_eq_i(mp_ages.size(), 2, "map remove bob -> size 2");
+run_assert(NOT mp_ages.contains("bob"), "map bob removed");
+
+--- keys and values
+array:s: mp_keys = mp_ages.keys();
+run_assert_eq_i(mp_keys.size(), 2, "map keys size = 2");
+
+array:i: mp_vals = mp_ages.values();
+run_assert_eq_i(mp_vals.size(), 2, "map values size = 2");
+
+--- empty map
+map: mp_empty {
+    schema = [s <-> i]
+    data = [EMPTY]
+};
+run_assert_eq_i(mp_empty.size(), 0, "empty map size = 0");
+
+--- clear
+mp_empty.insert("x", 1);
+mp_empty.clear();
+run_assert_eq_i(mp_empty.size(), 0, "map clear -> size 0");
+
+--- ============================================================
+--- SECTION 21: TABLES
+--- ============================================================
+>! "";
+>! "=== SECTION 21: TABLES ===";
+
+table: tb_products {
+    columns = [id :: i @auto, name :: s, price :: f]
+    rows = [("Laptop", 2999.99), ("Phone", 1499.50)]
+};
+
+run_assert_eq_i(tb_products.count(), 2, "table count = 2");
+
+--- row access
+s: tb_name0 = tb_products[0].name;
+f: tb_price1 = tb_products[1].price;
+run_assert_eq_s(tb_name0, "Laptop",  "table[0].name = Laptop");
+run_assert_eq_f(tb_price1, 1499.50, "table[1].price = 1499.50");
+
+--- get method
+s: tb_get_name = tb_products.get(0).name;
+run_assert_eq_s(tb_get_name, "Laptop", "table.get(0).name = Laptop");
+
+--- insert / add
+tb_products.insert("Tablet", 899.99);
+run_assert_eq_i(tb_products.count(), 3, "table insert -> count 3");
+
+tb_products.insert("Watch", 299.99);
+run_assert_eq_i(tb_products.count(), 4, "table add(insert) -> count 4");
+
+--- delete
+tb_products.delete(3);
+run_assert_eq_i(tb_products.count(), 3, "table delete -> count 3");
+
+--- update
+tb_products.update(0, ["Updated Laptop", 3499.99]);
+s: tb_upd_name = tb_products[0].name;
+run_assert_eq_s(tb_upd_name, "Updated Laptop", "table update name");
+
+--- where
+table: tb_expensive = tb_products.where(price > 1000.0);
+run_assert_eq_i(tb_expensive.count(), 2, "table where price>1000 count = 2");
+
+table: tb_has_name = tb_products.where(name HAS "Laptop");
+run_assert_eq_i(tb_has_name.count(), 1, "table where name HAS Laptop = 1");
+
+--- empty table
+table: tb_logs {
+    columns = [id :: i @auto, msg :: s]
+    rows = [EMPTY]
+};
+run_assert_eq_i(tb_logs.count(), 0, "empty table count = 0");
+
+--- join
+table: tb_orders {
+    columns = [oid :: i @auto, uid :: i, item :: s]
+    rows = [(1, "book"), (1, "pen"), (2, "bag")]
+};
+
+table: tb_users {
+    columns = [uid :: i, uname :: s]
+    rows = [(1, "Alice"), (2, "Bob")]
+};
+
+table: tb_joined = tb_users.join(tb_orders, "uid", "uid");
+run_assert_eq_i(tb_joined.count(), 3, "table join count = 3");
+
+--- ============================================================
+--- SECTION 22: JSON
+--- ============================================================
+>! "";
+>! "=== SECTION 22: JSON ===";
+
+json: js_cfg <<< {"port": 8080, "debug": false, "host": "localhost"} >>>;
+
+run_assert(js_cfg.exists("port"), "json exists port");
+run_assert(NOT js_cfg.exists("missing"), "json not exists missing");
+
+i: js_port;
+js_cfg.bind("port", js_port);
+run_assert_eq_i(js_port, 8080, "json bind port = 8080");
+
+s: js_host;
+js_cfg.bind("host", js_host);
+run_assert_eq_s(js_host, "localhost", "json bind host = localhost");
+
+js_cfg.set("port", 9090);
+i: js_new_port;
+js_cfg.bind("port", js_new_port);
+run_assert_eq_i(js_new_port, 9090, "json set port -> 9090");
+
+--- nested json
+json: js_nested <<< {"server": {"host": "example.com", "port": 443}} >>>;
+s: js_nested_host;
+js_nested.bind("server.host", js_nested_host);
+run_assert_eq_s(js_nested_host, "example.com", "json nested bind");
+
+--- size / count
+json: js_obj <<< {"a": 1, "b": 2, "c": 3} >>>;
+run_assert_eq_i(js_obj.size(), 3, "json size = 3");
+
+--- to_str
+json: js_serial <<< {"key": "val"} >>>;
+s: js_str = js_serial.to_str();
+run_assert(js_str HAS "key", "json to_str contains key");
+
+--- json parse
+s: js_raw = "{\"name\": \"Alice\", \"age\": 30}";
+json: js_parsed = json.parse(js_raw);
+s: jp_name;
+js_parsed.bind("name", jp_name);
+run_assert_eq_s(jp_name, "Alice", "json parse bind name = Alice");
+
+--- ============================================================
+--- SECTION 23: DATES
+--- ============================================================
+>! "";
+>! "=== SECTION 23: DATES ===";
+
+date: dt_christmas = date("2024-12-25");
+date: dt_halloween = date("2024-10-31");
+date: dt_custom    = date("25/12/2024", "DD/MM/YYYY");
+
+run_assert_eq_i(dt_christmas.year,  2024, "date year = 2024");
+run_assert_eq_i(dt_christmas.month, 12,   "date month = 12");
+run_assert_eq_i(dt_christmas.day,   25,   "date day = 25");
+
+--- custom format parse
+run_assert_eq_i(dt_custom.year,  2024, "custom fmt year = 2024");
+run_assert_eq_i(dt_custom.month, 12,   "custom fmt month = 12");
+run_assert_eq_i(dt_custom.day,   25,   "custom fmt day = 25");
+
+--- date.now()
+date: dt_now = date.now();
+run_assert(dt_now.year >= 2024, "date.now year >= 2024");
+run_assert(dt_now.month >= 1 AND dt_now.month <= 12, "date.now month in 1..12");
+run_assert(dt_now.day   >= 1 AND dt_now.day   <= 31, "date.now day in 1..31");
+run_assert(dt_now.hour  >= 0 AND dt_now.hour  <= 23, "date.now hour in 0..23");
+
+--- arithmetic
+date: dt_tomorrow  = dt_christmas + 1;
+date: dt_yesterday = dt_christmas - 1;
+run_assert_eq_i(dt_tomorrow.day,  26, "date + 1 = 26");
+run_assert_eq_i(dt_yesterday.day, 24, "date - 1 = 24");
+
+--- difference in days
+i: dt_diff = dt_christmas - dt_halloween;
+run_assert_eq_i(dt_diff, 55, "christmas - halloween = 55 days");
+
+--- comparison
+b: dt_before = dt_halloween < dt_christmas;
+run_assert(dt_before, "halloween < christmas");
+run_assert(NOT (dt_christmas < dt_halloween), "NOT christmas < halloween");
+
+--- formatting
+s: dt_fmt1 = dt_christmas.format();
+run_assert(dt_fmt1 HAS "2024", "format() contains 2024");
+
+s: dt_fmt2 = dt_christmas.format("DD/MM/YYYY");
+run_assert_eq_s(dt_fmt2, "25/12/2024", "format DD/MM/YYYY");
+
+--- ============================================================
+--- SECTION 24: CRYPTO
+--- ============================================================
+>! "";
+>! "=== SECTION 24: CRYPTO ===";
+
+s: cr_token = crypto.token(32);
+run_assert_eq_i(cr_token.length, 32, "crypto.token(32) length = 32");
+
+s: cr_token64 = crypto.token(64);
+run_assert_eq_i(cr_token64.length, 64, "crypto.token(64) length = 64");
+
+--- bcrypt hash and verify
+s: cr_pass   = "secret123";
+s: cr_hash_b = crypto.hash(cr_pass, "bcrypt");
+b: cr_valid_b = crypto.verify(cr_pass, cr_hash_b, "bcrypt");
+run_assert(cr_hash_b.length > 0,  "bcrypt hash not empty");
+run_assert(cr_valid_b,             "bcrypt verify valid password");
+
+b: cr_invalid_b = crypto.verify("wrongpass", cr_hash_b, "bcrypt");
+run_assert(NOT cr_invalid_b, "bcrypt verify invalid password");
+
+--- argon2 hash and verify
+s: cr_hash_a  = crypto.hash(cr_pass, "argon2");
+b: cr_valid_a = crypto.verify(cr_pass, cr_hash_a, "argon2");
+run_assert(cr_hash_a.length > 0,  "argon2 hash not empty");
+run_assert(cr_valid_a,             "argon2 verify valid password");
+
+b: cr_invalid_a = crypto.verify("wrongpass", cr_hash_a, "argon2");
+run_assert(NOT cr_invalid_a, "argon2 verify invalid password");
+
+--- ============================================================
+--- SECTION 25: STORE (FILE I/O)
+--- ============================================================
+>! "";
+>! "=== SECTION 25: STORE (FILE I/O) ===";
+
+s: st_path    = "test_output/xcx_test_file.txt";
+s: st_content = "Hello from XCX store test";
+
+b: st_written = store.write(st_path, st_content);
+run_assert(st_written, "store.write returns true");
+run_assert(store.exists(st_path), "store.exists after write");
+
+s: st_read = store.read(st_path);
+run_assert_eq_s(st_read, st_content, "store.read matches written");
+
+b: st_appended = store.append(st_path, "\nSecond line");
+run_assert(st_appended, "store.append returns true");
+
+s: st_read2 = store.read(st_path);
+run_assert(st_read2 HAS "Second line", "store.read after append has second line");
+
+b: st_deleted = store.delete(st_path);
+run_assert(st_deleted, "store.delete returns true");
+run_assert(NOT store.exists(st_path), "store.exists false after delete");
+
+--- ============================================================
+--- SECTION 26: HALT SYSTEM
+--- ============================================================
+>! "";
+>! "=== SECTION 26: HALT SYSTEM ===";
+
+halt.alert >! "halt.alert test - this is a warning (execution continues)";
+run_assert(true, "halt.alert does not stop execution");
+
+--- halt.error is a FATAL program terminator and cannot be caught or returned from.
+--- We verify halt.alert works (execution continues) and halt.error behavior
+--- is tested separately in xcx_runner.rs unit tests.
+--- The following tests valid non-error paths only.
+
+func hl_test_valid(i: hl_n -> i) {
+    if (hl_n > 0) then;
+        return 100 / hl_n;
+    end;
+    return -1;
+};
+
+i: hl_ok = hl_test_valid(5);
+run_assert_eq_i(hl_ok, 20, "no halt: 100/5 = 20");
+
+i: hl_guard = hl_test_valid(0);
+run_assert_eq_i(hl_guard, -1, "guard prevents div-by-zero");
+
+
+--- ============================================================
+--- SECTION 27: OPERATOR PRECEDENCE
+--- ============================================================
+>! "";
+>! "=== SECTION 27: OPERATOR PRECEDENCE ===";
+
+i: op_a = 2 + 3 * 4;
+run_assert_eq_i(op_a, 14, "precedence: 2+3*4 = 14");
+
+i: op_b = (2 + 3) * 4;
+run_assert_eq_i(op_b, 20, "parens: (2+3)*4 = 20");
+
+i: op_c = 2 ^ 3 + 1;
+run_assert_eq_i(op_c, 9, "2^3+1 = 9 (exp before add)");
+
+b: op_d = 1 + 1 == 2 AND 3 - 1 == 2;
+run_assert(op_d, "1+1==2 AND 3-1==2 both true");
+
+b: op_e = NOT false AND true;
+run_assert(op_e, "NOT false AND true = true");
+
+--- ============================================================
+--- SECTION 28: FOR LOOP OVER ARRAY (STRING AND FLOAT)
+--- ============================================================
+>! "";
+>! "=== SECTION 28: FOR LOOP COLLECTION TYPES ===";
+
+--- float array
+array:f: fl_arr {1.5, 2.5, 3.0};
+f: fl_sum = 0.0;
+for fl_el in fl_arr do;
+    fl_sum = fl_sum + fl_el;
+end;
+run_assert_eq_f(fl_sum, 7.0, "float array for loop sum = 7.0");
+
+--- bool array
+array:b: bl_arr {true, false, true};
+i: bl_true_count = 0;
+for bl_el in bl_arr do;
+    if (bl_el) then;
+        bl_true_count = bl_true_count + 1;
+    end;
+end;
+run_assert_eq_i(bl_true_count, 2, "bool array count trues = 2");
+
+--- ============================================================
+--- SECTION 29: FIBER AS FUNCTION PARAMETER
+--- ============================================================
+>! "";
+>! "=== SECTION 29: FIBER AS FUNCTION PARAMETER ===";
+
+fiber fp_source(-> i) {
+    yield 10;
+    yield 20;
+    yield 30;
+    return 0;
+};
+
+func fp_sum_fiber(fiber:i: fp_f -> i) {
+    i: fp_total = 0;
+    while (fp_f.isDone() == false) do;
+        i: fp_v = fp_f.next();
+        fp_total = fp_total + fp_v;
+    end;
+    return fp_total;
+};
+
+fiber:i: fp_inst = fp_source();
+i: fp_result = fp_sum_fiber(fp_inst);
+run_assert_eq_i(fp_result, 60, "fiber as param sum = 60");
+
+--- ============================================================
+--- SECTION 30: HTTP CLIENT
+--- ============================================================
+>! "";
+>! "=== SECTION 30: HTTP CLIENT ===";
+
+>! "  Testing HTTP GET...";
+json: hc_resp = net.get("https://httpbin.org/get");
+b: hc_ok;
+hc_resp.bind("ok", hc_ok);
+run_assert(hc_ok, "net.get httpbin ok = true");
+
+i: hc_status;
+hc_resp.bind("status", hc_status);
+run_assert_eq_i(hc_status, 200, "net.get status = 200");
+
+>! "  Testing HTTP POST...";
+json: hc_body <<< {"name": "XCX", "version": 2} >>>;
+json: hc_post_resp = net.post("https://httpbin.org/post", hc_body);
+b: hc_post_ok;
+hc_post_resp.bind("ok", hc_post_ok);
+run_assert(hc_post_ok, "net.post httpbin ok = true");
+
+--- ============================================================
+--- SECTION 31: JSON INJECT INTO TABLE
+--- ============================================================
+>! "";
+>! "=== SECTION 31: JSON INJECT ===";
+
+json: ji_data <<< {"users":[{"uid":1,"uname":"Alice"},{"uid":2,"uname":"Bob"}]} >>>;
+table: ji_table { columns=[uid::i, uname::s] rows=[EMPTY] };
+map: ji_map { schema=[s<->s] data=["uid"::"uid", "uname"::"uname"] };
+ji_data.inject("users", ji_map, ji_table);
+run_assert_eq_i(ji_table.count(), 2, "json inject -> 2 rows");
+s: ji_name = ji_table[0].uname;
+run_assert_eq_s(ji_name, "Alice", "json inject table[0].uname = Alice");
+
+--- ============================================================
+--- SECTION 32: NET.REQUEST (LOW-LEVEL)
+--- ============================================================
+>! "";
+>! "=== SECTION 32: NET.REQUEST ===";
+
+net.request {
+    method  = "GET",
+    url     = "https://httpbin.org/get",
+    timeout = 5000
+} as nr_resp;
+
+b: nr_ok;
+nr_resp.bind("ok", nr_ok);
+run_assert(nr_ok, "net.request GET ok = true");
+
+--- ============================================================
+--- SECTION 33: WAIT
+--- ============================================================
+>! "";
+>! "=== SECTION 33: WAIT ===";
+
+>! "  @wait 100ms...";
+@wait 100;
+run_assert(true, "@wait 100ms completed");
+
+--- ============================================================
+--- SECTION 34: TERMINAL COMMANDS
+--- ============================================================
+>! "";
+>! "=== SECTION 34: I/O OPERATORS ===";
+
+>! "  testing >! output";
+run_assert(true, "print >! works");
+
+--- @wait already tested above
+
+--- ============================================================
+--- SECTION 35: COMPLEX EXPRESSIONS AND EDGE CASES
+--- ============================================================
+>! "";
+>! "=== SECTION 35: COMPLEX EXPRESSIONS ===";
+
+--- chained method calls
+s: ce_chain = "  hello world  ".trim().upper().replace(" ", "_");
+run_assert_eq_s(ce_chain, "HELLO_WORLD", "chain trim.upper.replace");
+
+--- complex boolean expression
+i: ce_n = 7;
+b: ce_complex = (ce_n > 5 AND ce_n < 10) OR (ce_n == 0);
+run_assert(ce_complex, "complex bool (7>5 AND 7<10) OR 7==0 = true");
+
+--- string HAS chained with AND
+s: ce_text = "XCX Version 2.2";
+b: ce_has  = (ce_text HAS "XCX") AND (ce_text HAS "2.2");
+run_assert(ce_has, "HAS both substrings");
+
+--- integer arithmetic chain
+i: ce_math = (3 + 4) * 2 - (10 / 5) + 1;
+run_assert_eq_i(ce_math, 13, "(3+4)*2 - 10/5 + 1 = 13");
+
+--- modulo and comparison
+b: ce_even = (ce_math % 2 == 1);
+run_assert(ce_even, "13 % 2 == 1 (odd)");
+
+--- set operations chain
+set:N: ce_sa {1,,5};
+set:N: ce_sb {4,,8};
+set:N: ce_sc {5,,9};
+set:N: ce_combined = (ce_sa UNION ce_sb) INTERSECTION ce_sc;
+run_assert(ce_combined.contains(5), "chained set ops contains 5");
+run_assert(ce_combined.contains(8), "chained set ops contains 8");
+
+--- ============================================================
+--- SECTION 36: RANDOM (VARIOUS SET TYPES)
+--- ============================================================
+>! "";
+>! "=== SECTION 36: RANDOM CHOICE ===";
+
+set:S: rnd_names {"Alice", "Bob", "Carol", "Dave"};
+s: rnd_name = random.choice from rnd_names;
+run_assert(rnd_names.contains(rnd_name), "random.choice from S set valid");
+
+set:Z: rnd_negs {-5,,-1};
+i: rnd_neg = random.choice from rnd_negs;
+run_assert(rnd_neg >= -5 AND rnd_neg <= -1, "random.choice from Z set range");
+
+set:B: rnd_bools {true, false};
+b: rnd_bool = random.choice from rnd_bools;
+run_assert(rnd_bool == true OR rnd_bool == false, "random.choice from B set");
+
+--- ============================================================
+--- SECTION 37: INCLUDE SYSTEM (SELF-REFERENCE CHECK)
+--- ============================================================
+>! "";
+>! "=== SECTION 37: META / FINAL CHECK ===";
+
+>! "All test sections completed.";
+run_assert(true, "suite reached end");
+
+--- ============================================================
+--- FINAL
+--- ============================================================
+>! "";
+>! "========================================";
+>! "   ALL ELEMENT TESTS PASSED";
+>! "========================================";

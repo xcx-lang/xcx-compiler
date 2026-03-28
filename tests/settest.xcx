@@ -1,0 +1,46 @@
+>! "========================================";
+>! "       XCX 2.2 SET OPERATIONS TEST       ";
+>! "========================================";
+
+set:N: setOne {1,,15};
+set:N: setTwo {10,,20};
+
+>! "Set One: " + setOne;
+>! "Set Two: " + setTwo;
+>! "----------------------------------------";
+
+>! "[Calculated Results]";
+set:N: union = setOne UNION setTwo;
+set:N: intersec = setOne INTERSECTION setTwo;
+set:N: difference = setOne DIFFERENCE setTwo;
+set:N: sym_diff = setOne SYMMETRIC_DIFFERENCE setTwo;
+
+>! "Union:                " + union;
+>! "Intersection:         " + intersec;
+>! "Difference (1-2):     " + difference;
+>! "Symmetric Difference: " + sym_diff;
+>! "----------------------------------------";
+
+>! "[Inlined Operations]";
+>! "Union:                " + (setOne UNION setTwo);
+>! "Intersection:         " + (setOne INTERSECTION setTwo);
+>! "Difference (1-2):     " + (setOne DIFFERENCE setTwo);
+>! "Symmetric Difference: " + (setOne SYMMETRIC_DIFFERENCE setTwo);
+>! "----------------------------------------";
+
+>! "[Math Symbol Operations]";
+>! "Union (∪):            " + (setOne ∪ setTwo);
+>! "Intersection (∩):     " + (setOne ∩ setTwo);
+>! "Difference (\):       " + (setOne \ setTwo);
+>! "Symmetric Diff (⊕):   " + (setOne ⊕ setTwo);
+>! "----------------------------------------";
+
+>! "[Random Elements from Set Two]";
+for i in 1 to 5 do;
+    i: val = random.choice from setTwo;
+    >! "  Sample " + s(i) + ": " + s(val);
+end;
+
+>! "========================================";
+>! "            TEST COMPLETED              ";
+>! "========================================";

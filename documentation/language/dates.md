@@ -1,4 +1,4 @@
-# XCX 2.1 Date and Time
+# XCX 2.2 Date and Time
 
 ## Creation
 
@@ -39,4 +39,4 @@ s: s1 = now.format();                    --- Default: "YYYY-MM-DD HH:mm:ss"
 s: s2 = now.format("DD/MM/YYYY HH:mm");  --- Custom output
 ```
 
-**Tokens:** `YYYY` (Year), `MM` (Month 01-12), `DD` (Day 01-31), `HH` (Hour 00-23), `mm` (Minute), `ss` (Second), `M` and `D` (No leading zero).
+**Tokens:** `YYYY` (Year), `MM` (Month 01-12), `DD` (Day 01-31), `HH` (Hour 00-23), `mm` (Minute), `ss` (Second), `SSS` or `ms` (Milliseconds), `M` and `D` (No leading zero).
