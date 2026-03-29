@@ -1926,6 +1926,30 @@ impl Executor {
                 OpCode::Print { src } => {
                     println!("{}", locals[src as usize].to_string());
                 }
+                OpCode::Input { dst } => {
+                    use std::io::BufRead;
+                    let _ = std::io::stdout().flush();
+                    // Release globals lock before blocking on stdin
+                    drop(glbs);
+                    let mut line = String::new();
+                    let stdin = std::io::stdin();
+                    let _ = stdin.lock().read_line(&mut line);
+                    glbs = vm_arc.globals.write();
+                    let trimmed = line.trim_end_matches(['\n', '\r']);
+                    let val = if let Ok(n) = trimmed.parse::<i64>() {
+                        Value::from_i64(n)
+                    } else if let Ok(f) = trimmed.parse::<f64>() {
+                        Value::from_f64(f)
+                    } else if trimmed == "true" {
+                        Value::from_bool(true)
+                    } else if trimmed == "false" {
+                        Value::from_bool(false)
+                    } else {
+                        Value::from_string(std::sync::Arc::new(trimmed.to_string()))
+                    };
+                    unsafe { locals[dst as usize].dec_ref(); }
+                    locals[dst as usize] = val;
+                }
                 OpCode::HaltAlert { src } => {
                     println!("ALERT: {}", locals[src as usize].to_string());
                 }
