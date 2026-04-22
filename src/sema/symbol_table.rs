@@ -3,6 +3,9 @@ use std::collections::{HashMap, HashSet};
 use crate::parser::ast::Type;
 
 #[derive(Clone)]
+/// Hierarchical symbol table for tracking variable types and constant status.
+/// Supports nested scopes and parent-linkage for cross-context resolution
+/// during semantic analysis and code generation.
 pub struct SymbolTable<'a> {
     parent: Option<&'a SymbolTable<'a>>,
     scopes: Vec<HashMap<String, Type>>,
@@ -39,22 +42,26 @@ impl<'a> SymbolTable<'a> {
     }
 
     pub fn has(&self, name: &str) -> bool {
-        for scope in self.scopes.iter().rev() {
-            if scope.contains_key(name) {
-                return true;
+        let name = name.trim();
+        let mut curr = Some(self);
+        while let Some(st) = curr {
+            for scope in st.scopes.iter().rev() {
+                if scope.contains_key(name) {
+                    return true;
+                }
             }
-        }
-        if let Some(p) = self.parent {
-            return p.has(name);
+            curr = st.parent;
         }
         false
     }
 
     pub fn has_in_current_scope(&self, name: &str) -> bool {
+        let name = name.trim();
         self.scopes.last().map(|s| s.contains_key(name)).unwrap_or(false)
     }
 
     pub fn define(&mut self, name: String, ty: Type, is_const: bool) {
+        let name = name.trim().to_string();
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.clone(), ty);
         }
@@ -66,25 +73,29 @@ impl<'a> SymbolTable<'a> {
     }
 
     pub fn lookup(&self, name: &str) -> Option<Type> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(ty) = scope.get(name) {
-                return Some(ty.clone());
+        let name = name.trim();
+        let mut curr = Some(self);
+        while let Some(st) = curr {
+            for scope in st.scopes.iter().rev() {
+                if let Some(ty) = scope.get(name) {
+                    return Some(ty.clone());
+                }
             }
-        }
-        if let Some(p) = self.parent {
-            return p.lookup(name);
+            curr = st.parent;
         }
         None
     }
     
     pub fn is_const(&self, name: &str) -> bool {
-        for (i, scope) in self.scopes.iter().enumerate().rev() {
-            if scope.contains_key(name) {
-                return self.consts[i].contains(name);
+        let name = name.trim();
+        let mut curr = Some(self);
+        while let Some(st) = curr {
+            for (i, scope) in st.scopes.iter().enumerate().rev() {
+                if scope.contains_key(name) {
+                    return st.consts[i].contains(name);
+                }
             }
-        }
-        if let Some(p) = self.parent {
-            return p.is_const(name);
+            curr = st.parent;
         }
         false
     }

@@ -1,8 +1,5 @@
---- test_complex_binding.xcx
-
 >! "[Hardening] Starting Complex Binding Test...";
 
---- 1. Nested JSON and multi-type binding
 json: raw <<< {
     "user": {
         "id": 101,
@@ -36,7 +33,6 @@ else;
     halt.error >! "[Hardening] JSON Nested Binding: FAIL";
 end;
 
---- 2. Bulk Injection to Table
 table: logs {
     columns = [ id :: i, msg :: s, level :: i ]
     rows = [EMPTY]
@@ -63,7 +59,6 @@ else;
     halt.error >! "[Hardening] JSON Table Injection: FAIL";
 end;
 
---- 3. Dynamic Setting and Array growth
 json: dyn <<< {"data": []} >>>;
 for i in 0 to 9 do;
     dyn.set("data[" + i + "]", i * 10);
@@ -71,7 +66,7 @@ end;
 
 i: d_val;
 dyn.bind("data[5]", d_val);
---- .count() na obiekcie JSON zwraca liczbę kluczy. Tu mamy jeden klucz "data".
+
 if (dyn.count() == 1 AND d_val == 50) then;
     >! "[Hardening] JSON Dynamic Array Set: PASS";
 else;

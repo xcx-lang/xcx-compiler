@@ -1,0 +1,26 @@
+--- Collections Smoke Test
+
+array:i: a {1, 2, 3};
+a.push(4);
+assert(a.size() == 4);
+assert(a.get(0) == 1);
+
+set:Z: s {1, 2, 3};
+s.add(4);
+assert(s.contains(4));
+assert(s.size() == 4);
+
+map: m {
+    schema = [s <-> i]
+    data = ["a" :: 1, "b" :: 2]
+};
+m.insert("c", 3);
+assert(m.get("a") == 1);
+assert(m.contains("c"));
+
+table: t {
+    columns = [ id :: i @auto, name :: s ]
+    rows = [ ("Alice"), ("Bob") ]
+};
+assert(t.count() == 2);
+t.show();

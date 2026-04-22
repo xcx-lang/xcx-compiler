@@ -1,0 +1,74 @@
+database: db {
+    engine = "sqlite",
+    path   = "test_tojson.db"
+};
+
+table: orders {
+    columns = [
+        id     :: i @auto @pk,
+        item   :: s,
+        qty    :: i,
+        done   :: i
+    ]
+    rows = [EMPTY]
+};
+
+fiber run(-> b) {
+    yield db.sync(orders);
+    yield db.truncate(orders);
+
+    yield db.insert(orders, "apple",  3, 1);
+    yield db.insert(orders, "banana", 5, 0);
+    yield db.insert(orders, "cherry", 2, 1);
+
+    table: all = yield db.fetch(orders);
+    json: j = all.toJson();
+
+    if (j.size() != 3) then;
+        >! "FAIL: toJson should have 3 elements, has " + s(j.size());
+        return false;
+    end;
+    >! "PASS: toJson().size() = " + s(j.size());
+
+    json: first = j.get(0);
+    s: item_name;
+    first.bind("item", item_name);
+    if (item_name != "apple") then;
+        >! "FAIL: first item should be apple, is " + item_name;
+        return false;
+    end;
+    >! "PASS: first item = " + item_name;
+
+    table: done_orders = yield db.fetch(orders).where(done == 1);
+    json: done_json = done_orders.toJson();
+    if (done_json.size() != 2) then;
+        >! "FAIL: done orders should be 2, are " + s(done_json.size());
+        return false;
+    end;
+    >! "PASS: done_orders.toJson().size() = " + s(done_json.size());
+
+    i: total_qty = 0;
+    i: idx = 0;
+    while (idx < j.size()) do;
+        json: row = j.get(idx);
+        i: q;
+        row.bind("qty", q);
+        total_qty = total_qty + q;
+        idx = idx + 1;
+    end;
+    if (total_qty != 10) then;
+        >! "FAIL: sum of qty should be 10, is " + s(total_qty);
+        return false;
+    end;
+    >! "PASS: sum of qty = " + s(total_qty);
+
+    return true;
+};
+
+fiber:b: f = run();
+b: ok = f.next();
+if (ok) then;
+    >! "=== sql_tojson: ALL TESTS PASSED ===";
+els;
+    >! "=== sql_tojson: ERROR ===";
+end;

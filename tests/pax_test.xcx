@@ -1,0 +1,55 @@
+--- tests/pax_test.xcx
+--- Simplified parsePax to test it
+func parsePax(s: content -> json) {
+    array:s: lines = content.split("\n");
+    json: res <<< {"name": "unnamed", "version": "0.1.0", "author": "", "description": "", "main": "", "deps": [], "tags": [], "files": []} >>>;
+    
+    for line in lines do;
+        s: l = line.split("---").get(0).trim();
+        if (l == "" OR l == "/") then; continue; end;
+
+        if (l HAS "::") then;
+            array:s: kv = l.split("::");
+            if (kv.size() >= 2) then;
+                s: k = kv.get(0).trim().lower();
+                s: v = kv.get(1).trim();
+
+                if (v HAS "\"") then;
+                    array:s: b = v.split("\"");
+                    if (b.size() >= 2) then;
+                        s: val = b.get(1);
+                        if (k == "name") then; res.set("name", val);
+                        elif (k == "version") then; res.set("version", val);
+                        elif (k == "author") then; res.set("author", val);
+                        elif (k == "description") then; res.set("description", val);
+                        end;
+                    end;
+                end;
+            end;
+        end;
+    end;
+    return res;
+};
+
+func main() {
+    s: pax1 = "    version     :: \"1.2.1\",";
+    json: cfg1 = parsePax(pax1);
+    >! "Version 1: " + cfg1.get("version");
+    
+    if (cfg1.get("version") == "1.2.1") then;
+        >! "PASSED 1";
+    else;
+        >! "FAILED 1";
+    end;
+
+    s: pax2 = "version::\"0.2.0\"";
+    json: cfg2 = parsePax(pax2);
+    >! "Version 2: " + cfg2.get("version");
+    if (cfg2.get("version") == "0.2.0") then;
+        >! "PASSED 2";
+    else;
+        >! "FAILED 2";
+    end;
+};
+
+main();

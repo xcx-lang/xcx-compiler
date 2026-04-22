@@ -1,4 +1,4 @@
-# XCX 2.2 Functions and Fibers
+# XCX 3.0 Functions and Fibers
 
 > [!IMPORTANT]
 > **Global Scope Rule**: Functions and fibers must be declared at the **top level** of a file. They cannot be nested inside `if`/`while`/`for` blocks or other functions/fibers in a way that affects scoping — all function and fiber names are registered globally during compilation.

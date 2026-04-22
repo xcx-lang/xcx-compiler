@@ -1,0 +1,408 @@
+i: def_int;
+f: def_float;
+s: def_str;
+b: def_bool;
+>! "--- 1. PRIMITIVES ---";
+>! "def_int (expect 0): " + def_int;
+>! "def_float (expect 0): " + def_float;
+>! "def_str (expect empty): '" + def_str + "'";
+>! "def_bool (expect false): " + def_bool;
+
+i: age = 25;
+f: pi = 3.14159;
+s: name = "XCX";
+b: ok = true;
+age = 26;
+>! "age after reassign (expect 26): " + age;
+
+const i: MAX = 100;
+>! "MAX (expect 100): " + MAX;
+
+>! "--- 2. INT ARITHMETIC ---";
+i: a = 10;
+i: b = 3;
+>! "10 + 3 (expect 13): " + (a + b);
+>! "10 - 3 (expect  7): " + (a - b);
+>! "10 * 3 (expect 30): " + (a * b);
+>! "10 / 3 (expect  3): " + (a / b);
+>! "10 % 3 (expect  1): " + (a % b);
+>! "10 ^ 3 (expect 1000): " + (a ^ b);
+
+i: phone = 48 ++ 777;
+>! "48 ++ 777 (expect 48777): " + phone;
+
+>! "--- 3. FLOAT ARITHMETIC ---";
+f: x = 5.5;
+f: y = 2.0;
+>! "5.5 + 2.0 (expect 7.5): " + (x + y);
+>! "5.5 - 2.0 (expect 3.5): " + (x - y);
+>! "5.5 * 2.0 (expect 11.0): " + (x * y);
+>! "5.5 / 2.0 (expect 2.75): " + (x / y);
+
+>! "--- 4. UNARY NEGATION ---";
+i: neg_int = -7;
+f: neg_float = -3.14;
+>! "neg int (expect -7): " + neg_int;
+>! "neg float (expect -3.14): " + neg_float;
+
+i: pos = 5;
+i: neg_expr = -5;
+>! "5 + (-5) (expect 0): " + (pos + neg_expr);
+
+i: val = 42;
+i: negated = 0 - val;
+>! "0 - 42 (expect -42): " + negated;
+
+>! "--- 5. STRINGS ---";
+s: hello = "Hello";
+s: world = "World";
+s: combined = hello + ", " + world + "!";
+>! "concat (expect 'Hello, World!'): " + combined;
+
+b: has_comma = combined HAS ",";
+b: no_x = combined HAS "XYZ";
+>! "has comma (expect true): " + has_comma;
+>! "has XYZ (expect false): " + no_x;
+
+i: num = 42;
+>! "num in string (expect 'Answer: 42'): Answer: " + num;
+
+>! "--- 6. BOOLEANS ---";
+b: t = true;
+b: f_val = false;
+>! "true AND true   (expect true):  " + (t AND t);
+>! "true AND false  (expect false): " + (t AND f_val);
+>! "false OR true   (expect true):  " + (f_val OR t);
+>! "false OR false  (expect false): " + (f_val OR f_val);
+>! "NOT true        (expect false): " + (NOT t);
+>! "NOT false       (expect true):  " + (NOT f_val);
+
+--- Short-circuit equivalents with symbols
+>! "true && false   (expect false): " + (t && f_val);
+>! "false || true   (expect true):  " + (f_val || t);
+
+>! "--- 7. COMPARISONS ---";
+i: p = 10;
+i: q = 20;
+>! "10 == 10 (expect true):  " + (p == p);
+>! "10 != 20 (expect true):  " + (p != q);
+>! "10 <  20 (expect true):  " + (p < q);
+>! "10 >  20 (expect false): " + (p > q);
+>! "10 <= 10 (expect true):  " + (p <= p);
+>! "20 >= 10 (expect true):  " + (q >= p);
+
+>! "--- 8. CONTROL FLOW ---";
+i: score = 75;
+
+if (score >= 90) then;
+    >! "Grade: A";
+elseif (score >= 75) then;
+    >! "Grade: B  (expect this)";
+elseif (score >= 60) then;
+    >! "Grade: C";
+else;
+    >! "Grade: F";
+end;
+
+b: admin = true;
+b: active_user = true;
+if (admin AND active_user) then;
+    >! "Admin active (expect this)";
+else;
+    >! "Not admin active";
+end;
+
+i: boundary = 0;
+if (boundary > 0) then;
+    >! "FAIL: should not print";
+else;
+    >! "boundary == 0 — correct";
+end;
+
+>! "--- 9. FOR LOOPS ---";
+>! "Range 1..3:";
+for i in 1 to 3 do;
+    >! "  i = " + i;
+end;
+
+>! "Even 0..6 step 2:";
+for j in 0 to 6 @step 2 do;
+    >! "  j = " + j;
+end;
+
+>! "Single iter (5..5):";
+for k in 5 to 5 do;
+    >! "  k = " + k;
+end;
+
+>! "--- 10. WHILE / BREAK / CONTINUE ---";
+
+i: cnt = 0;
+while (cnt < 3) do;
+    cnt = cnt + 1;
+    >! "cnt = " + cnt;
+end;
+>! "after while (expect 3): " + cnt;
+
+i: brk = 0;
+while (brk < 100) do;
+    brk = brk + 1;
+    if (brk == 3) then;
+        break;
+    end;
+end;
+>! "break at 3 (expect 3): " + brk;
+
+>! "Odd numbers 1..5 via continue:";
+for n in 1 to 5 do;
+    if (n % 2 == 0) then;
+        continue;
+    end;
+    >! "  " + n;
+end;
+
+>! "--- 11. FUNCTIONS ---";
+
+func greet(s: who) {
+    >! "Hello, " + who + "!";
+};
+greet("Alice");
+greet("Bob");
+
+func add(i: x, i: y -> i) {
+    return x + y;
+};
+>! "add(3,4) (expect 7): " + add(3, 4);
+
+func average(f: u, f: v -> f) {
+    return (u + v) / 2.0;
+};
+>! "avg(3.0,7.0) (expect 5.0): " + average(3.0, 7.0);
+
+func factorial(i: n -> i) {
+    if (n <= 1) then;
+        return 1;
+    else;
+        return n * factorial(n - 1);
+    end;
+};
+>! "5! (expect 120): " + factorial(5);
+>! "0! (expect 1):   " + factorial(0);
+
+func fib(i: n -> i) {
+    if (n <= 0) then;
+        return 0;
+    elseif (n == 1) then;
+        return 1;
+    else;
+        return fib(n - 1) + fib(n - 2);
+    end;
+};
+>! "fib(6) (expect 8): " + fib(6);
+>! "fib(1) (expect 1): " + fib(1);
+>! "fib(0) (expect 0): " + fib(0);
+
+>! "--- 12. ARRAYS ---";
+array:i: nums {10, 20, 30};
+>! "size (expect 3): " + nums.size();
+>! "get(0) (expect 10): " + nums.get(0);
+>! "get(2) (expect 30): " + nums.get(2);
+
+nums.insert(1, 15);
+>! "after insert(1,15) size (expect 4): " + nums.size();
+>! "get(1) (expect 15): " + nums.get(1);
+
+nums.update(0, 5);
+>! "after update(0,5) get(0) (expect 5): " + nums.get(0);
+
+nums.delete(3);
+>! "after delete(3) size (expect 3): " + nums.size();
+
+b: has10 = nums.contains(5);
+b: no99 = nums.contains(999);
+>! "contains 5 (expect true):  " + has10;
+>! "contains 999 (expect false): " + no99;
+
+i: idx5 = nums.find(5);
+>! "find(5) (expect 0): " + idx5;
+
+>! "Array elements:";
+for el in nums do;
+    >! "  " + el;
+end;
+
+array:s: words {"alpha", "beta", "gamma"};
+>! "words[1] (expect beta): " + words.get(1);
+
+>! "--- 13. SETS ---";
+
+set:N: small {1,,5};
+>! "set N {1..5} size (expect 5): " + small.size();
+>! "contains 3 (expect true):  " + small.contains(3);
+>! "contains 9 (expect false): " + small.contains(9);
+
+set:Z: zset {-2, -1, 0, 1, 2};
+>! "Z set size (expect 5): " + zset.size();
+
+--- Alice is automatically deduped
+set:S: names {"Alice", "Bob", "Alice", "Charlie"};
+>! "S set size (expect 3): " + names.size();
+
+set:N: setA {1,,5};
+set:N: setB {3,,7};
+set:N: u = setA UNION setB;
+set:N: inter = setA INTERSECTION setB;
+set:N: diff = setA DIFFERENCE setB;
+>! "union {1..5} ∪ {3..7} size (expect 7): " + u.size();
+>! "inter {1..5} ∩ {3..7} size (expect 3): " + inter.size();
+>! "diff  {1..5} \\ {3..7} size (expect 2): " + diff.size();
+
+set:N: choices {10, 20, 30};
+i: picked = random.choice from choices;
+>! "random.choice from {10,20,30} (any value): " + picked;
+
+>! "--- 14. MAPS ---";
+
+map: ages {
+    schema = [s <-> i]
+    data = [
+        "alice" :: 30,
+        "bob"   :: 25
+    ]
+};
+
+>! "ages.size (expect 2): " + ages.size();
+>! "ages.get('alice') (expect 30): " + ages.get("alice");
+>! "ages.contains('bob') (expect true):  " + ages.contains("bob");
+>! "ages.contains('eve') (expect false): " + ages.contains("eve");
+
+ages.insert("charlie", 40);
+>! "after insert charlie (expect 3): " + ages.size();
+
+map: empty_map {
+    schema = [i <-> s]
+    data = [EMPTY]
+};
+>! "empty map size (expect 0): " + empty_map.size();
+
+>! "--- 15. TABLES ---";
+
+table: products {
+    columns = [
+        id   :: i @auto,
+        name :: s,
+        price :: f
+    ]
+    rows = [
+        ("Laptop", 2999.99),
+        ("Phone",  1499.50),
+        ("Mouse",    79.99)
+    ]
+};
+
+>! "products.count (expect 3): " + products.count();
+>! "products[0].name (expect Laptop): " + products[0].name;
+>! "products[1].name (expect Phone):  " + products[1].name;
+>! "products[2].name (expect Mouse):  " + products[2].name;
+
+products.insert("Keyboard", 149.99);
+>! "after insert count (expect 4): " + products.count();
+>! "products[3].name (expect Keyboard): " + products[3].name;
+
+products.delete(3);
+>! "after delete count (expect 3): " + products.count();
+
+table: expensive = products.where(price > 1000);
+>! "expensive rows (expect 2): " + expensive.count();
+
+table: orders {
+    columns = [
+        order_id :: i @auto,
+        qty      :: i
+    ]
+    rows = [EMPTY]
+};
+>! "empty orders (expect 0): " + orders.count();
+
+orders.insert(5);
+>! "orders after insert (expect 1): " + orders.count();
+
+>! "--- 16. DATES ---";
+date: christmas = date("2024-12-25");
+i: xmas_year  = christmas.year;
+i: xmas_month = christmas.month;
+i: xmas_day   = christmas.day;
+>! "christmas year  (expect 2024): " + xmas_year;
+>! "christmas month (expect 12):   " + xmas_month;
+>! "christmas day   (expect 25):   " + xmas_day;
+
+date: day_after = christmas + 1;
+>! "day after christmas day (expect 26): " + day_after.day;
+
+date: day_before = christmas - 1;
+>! "day before christmas day (expect 24): " + day_before.day;
+
+date: new_year = date("2025-01-01");
+i: days_gap = new_year - christmas;
+>! "new_year - christmas (expect 7): " + days_gap;
+
+b: before_ny = (christmas < new_year);
+>! "christmas < new_year (expect true): " + before_ny;
+
+date: custom = date("25/12/2024", "DD/MM/YYYY");
+>! "custom date year (expect 2024): " + custom.year;
+
+>! "--- 17. HALT.ALERT (program must continue) ---";
+halt.alert >! "This is a warning — program continues";
+>! "Line after halt.alert (expect this to print)";
+
+>! "--- 18. HALT.ERROR in function (frame stops, caller continues) ---";
+
+func safe_div(i: num, i: divisor -> i) {
+    if (divisor == 0) then;
+        halt.error >! "Division by zero in safe_div";
+        return -1;
+    end;
+    return num / divisor;
+};
+
+i: ok_result = safe_div(10, 2);
+>! "safe_div(10,2) (expect 5): " + ok_result;
+
+>! "Calling safe_div(10,0) — halt.error inside function:";
+i: r2 = safe_div(10, 0);
+>! "After call (program continues even though safe_div errored)";
+
+>! "--- 19. GLOBALS > 1024 ---";
+i: g1000 = 1000;
+i: g1001 = 1001;
+i: g1002 = 1002;
+i: g1003 = 1003;
+i: g1004 = 1004;
+i: g1005 = 1005;
+>! "g1005 (expect 1005): " + g1005;
+
+>! "--- 20. NESTED LOOPS ---";
+i: outer_sum = 0;
+for oi in 1 to 3 do;
+    for oj in 1 to 3 do;
+        if (oj == 2) then;
+            continue;
+        end;
+        outer_sum = outer_sum + 1;
+    end;
+end;
+>! "outer_sum (expect 6): " + outer_sum;
+
+i: break_sum = 0;
+for bi in 1 to 3 do;
+    for bj in 1 to 10 do;
+        if (bj > 2) then;
+            break;
+        end;
+        break_sum = break_sum + 1;
+    end;
+end;
+>! "break_sum (expect 6): " + break_sum;
+
+>! "=== ALL EDGE CASES COMPLETE ===";

@@ -1,0 +1,42 @@
+i: x = 10;
+i: y = 5;
+
+.terminal !raw;
+.terminal !clear;
+.terminal !cursor off;
+
+while (true) do;
+    .terminal !move 2 2;
+    >! "XCX 3.0 Interactive Demo";
+    .terminal !move 2 3;
+    >! "Use ARROWS to move @, ESC to exit";
+    
+    .terminal !move x y;
+    >! "@";
+    
+    s: k = input.key() @wait;
+    
+    if (k == "ESC") then;
+        break;
+    end;
+    
+    --- Clear old position
+    .terminal !move x y;
+    >! " ";
+    
+    if (k == "UP") then; y = y - 1; end;
+    if (k == "DOWN") then; y = y + 1; end;
+    if (k == "LEFT") then; x = x - 1; end;
+    if (k == "RIGHT") then; x = x + 1; end;
+    
+    --- Boundary checks
+    if (x < 1) then; x = 1; end;
+    if (y < 4) then; y = 4; end;
+    if (x > 40) then; x = 40; end;
+    if (y > 20) then; y = 20; end;
+end;
+
+.terminal !normal;
+.terminal !clear;
+.terminal !cursor on;
+>! "Demo finished. XCX 3.0 is ready.";

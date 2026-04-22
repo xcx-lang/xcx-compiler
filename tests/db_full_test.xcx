@@ -1,0 +1,55 @@
+database: app {
+    engine = "sqlite",
+    path   = "data.db"
+};
+
+table: users {
+    columns = [
+        id    :: i @auto @pk,
+        name  :: s @unique,
+        email :: s @unique,
+        age   :: i,
+        phone :: s @optional
+    ]
+    rows = [EMPTY]
+};
+
+    >! "Syncing schema...";
+    app.sync(users);
+    >! "Schema synced.";
+
+    if (app.isOpen()) then; >! "Database is open"; end;
+    if (app.has(users)) then; >! "Table users exists"; end;
+
+    fiber test_db(json: req -> json) {
+        >! "--- TEST: insert";
+        yield app.insert(users, name = "Bob", email = "bob@example.com", age = 30);
+        
+        >! "--- TEST: fetch";
+        table: all = yield app.fetch(users);
+        >! all.toJson();
+
+        >! "--- TEST: save (upsert table)";
+        users.add(name = "Alice", email = "alice@example.com", age = 25);
+        yield app.save(users);
+        
+        >! "--- TEST: remove + where";
+        yield app.remove(users).where(id == 1);
+        
+        >! "--- TEST: truncate";
+        yield app.truncate(users);
+        
+        >! "--- TEST: exec";
+        yield app.exec("INSERT INTO users (name, email, age) VALUES ('Alice', 'alice@test.com', 25)");
+
+        table: final = yield app.fetch(users);
+        yield net.respond(200, final.toJson());
+    };
+
+>! "Starting server on 8888...";
+serve: api {
+    port   = 8888,
+    routes = [
+        "*" :: test_db
+    ]
+};

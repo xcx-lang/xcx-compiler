@@ -1,0 +1,16 @@
+i: counter = 0;
+date: start = date.now();
+
+for a in 1 to 1000 do;
+    for b in 1 to 1000 do;
+        for c in 1 to 1000 do;
+            counter = counter + 1;
+        end;
+    end;
+end;
+
+date: end_t = date.now();
+
+s: res = "Counter: " + s(counter) + "\nStart: " + start.format("HH:mm:ss.SSS") + "\nEnd: " + end_t.format("HH:mm:ss.SSS");
+store.write("results_xcx.txt", res);
+>! "Done. Results saved to results_xcx.txt";

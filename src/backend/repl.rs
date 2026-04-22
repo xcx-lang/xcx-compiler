@@ -70,7 +70,7 @@ pub fn run_repl() {
 
         if !errors.is_empty() {
             for err in errors {
-                println!("Error: {:?}", err.kind);
+                println!("Error: {}", err.kind.to_diagnostic_message());
             }
             continue;
         }
@@ -99,21 +99,22 @@ REPL COMMANDS:
 BASIC SYNTAX:
   type: name = value;       Declare a variable (e.g., i: age = 25;)
   const type: NAME = value; Declare a constant
-  >! expression;            Print result to terminal
+  >! expression;            Print result to terminal (e.g., >! 2 + 2;)
   >? variable;              Wait for user input
 
 DATA TYPES:
-  i: Integer (64-bit)       f: Float (64-bit)
+  i: Integer (48-bit)       f: Float (64-bit)
   s: String (UTF-8)         b: Boolean (true/false)
-  array:T { ... }           set:D { ... }
+  date: Date (YYYY-MM-DD)   json: JSON Object
+  array:T { ... }           set:D  { ... }
   map:K<->V { ... }         table: { columns=[...] rows=[...] }
 
-STRING METHODS:
-  s.length                  Get number of Unicode characters
-  s.upper() / s.lower()      Case conversion
-  s.trim()                  Remove whitespace
-  s.replace(from, to)       Replace substring
-  s.slice(start, end)       Extract substring
+BUILT-IN SERVICES:
+  json.parse(s)             Parse string to JSON
+  date.now()                Get current date
+  date("2024-01-01")        Create date literal
+  store.read(path)          Read file content
+  net.get(url)              Perform HTTP GET request
 
 ARITHMETIC & LOGIC:
   +, -, *, /, %, ^, ++      Operators

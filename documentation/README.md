@@ -1,6 +1,6 @@
 # XCX Technical Documentation Suite
 
-Welcome to the official technical documentation for XCX 2.2 and the XCX Compiler.
+Welcome to the official technical documentation for XCX 3.0 and the XCX Compiler.
 
 ## 📖 Language Reference
 Comprehensive guides on the XCX language syntax and features.
@@ -12,6 +12,7 @@ Comprehensive guides on the XCX language syntax and features.
 - [Control Flow](language/control_flow.md): Conditionals and loops.
 - [Functions & Fibers](language/functions_fibers.md): Subroutines, coroutines, and delegation.
 - [Collections](language/collections.md): Arrays, Sets, Maps, and Tables (Relational).
+- [Database (SQLite)](language/database.md): Native relational database support.
 - [JSON & HTTP](language/json_http.md): Data interchange, networking, and safety.
 - [Date & Time](language/dates.md): Creation, fields, and formatting.
 - [I/O & Terminal](language/io_terminal.md): Input, output, delays, and system commands.
@@ -22,11 +23,14 @@ Comprehensive guides on the XCX language syntax and features.
 ## ⚙️ Compiler Internals
 Technical deep-dives into how the XCX compiler and VM work.
 
-- [Architecture Overview](compiler/architecture.md): The compilation pipeline.
+- [Architecture Overview](compiler/README.md): The compilation pipeline.
 - [Lexer](compiler/lexer.md): Tokenization and recursive scanning.
 - [Parser](compiler/parser.md): Pratt parsing and AST generation.
-- [Semantic Analysis](compiler/semantics.md): Type checking and symbol resolution.
-- [Virtual Machine](compiler/vm.md): Stack machine architecture and OpCodes.
+- [Semantic Analysis](compiler/sema.md): Type checking and symbol resolution.
+- [Backend & VM](compiler/backend.md): Register machine architecture and OpCodes.
+- [Macro Expander](compiler/expander.md): Include resolution and aliasing.
+- [JIT Compiler](compiler/jit.md): Cranelift tracing JIT documentation.
+- [XCX Language Specs](compiler/language.md): Technical language specification.
 
 ## 📦 Tooling
 Guides for the XCX ecosystem tools.
@@ -34,4 +38,4 @@ Guides for the XCX ecosystem tools.
 - [PAX Manual](pax/pax_manual.md): Package management and project structure.
 
 ---
-*Documentation Version: 2.2.0 *
+*Documentation Version: 3.0.0 *

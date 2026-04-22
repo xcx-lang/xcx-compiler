@@ -1,0 +1,11 @@
+s: zipFile = "v_test.zip";
+if (store.zip("src", zipFile)) then;
+    >! "Zip Success";
+    if (store.exists(zipFile)) then;
+        >! "File verified on disk";
+    else;
+        >! "ERROR: File missing after success return";
+    end;
+else;
+    >! "Zip Failed according to return value";
+end;

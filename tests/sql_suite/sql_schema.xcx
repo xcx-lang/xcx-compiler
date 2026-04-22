@@ -1,0 +1,72 @@
+database: db {
+    engine = "sqlite",
+    path   = "test_schema.db"
+};
+
+table: logs {
+    columns = [
+        id  :: i @auto @pk,
+        msg :: s,
+        lvl :: i
+    ]
+    rows = [EMPTY]
+};
+
+fiber run(-> b) {
+    yield db.drop(logs);
+
+    b: exists_before;
+    exists_before = db.has(logs);
+    if (exists_before) then;
+        >! "FAIL: table should not exist before sync";
+        return false;
+    end;
+    >! "PASS: has() before sync = false";
+
+    yield db.sync(logs);
+    b: exists_after;
+    exists_after = db.has(logs);
+    if (NOT exists_after) then;
+        >! "FAIL: table should exist after sync";
+        return false;
+    end;
+    >! "PASS: has() after sync = true";
+
+    yield db.insert(logs, "start", 1);
+    yield db.insert(logs, "info",  0);
+    yield db.insert(logs, "error", 2);
+
+    table: all = yield db.fetch(logs);
+    if (all.count() != 3) then;
+        >! "FAIL: should be 3 logs, is " + s(all.count());
+        return false;
+    end;
+    >! "PASS: 3 logs inserted";
+
+    yield db.drop(logs);
+    b: exists_dropped;
+    exists_dropped = db.has(logs);
+    if (exists_dropped) then;
+        >! "FAIL: table should be removed after drop";
+        return false;
+    end;
+    >! "PASS: has() after drop = false";
+
+    yield db.sync(logs);
+    table: fresh = yield db.fetch(logs);
+    if (fresh.count() != 0) then;
+        >! "FAIL: new table should be empty, has " + s(fresh.count());
+        return false;
+    end;
+    >! "PASS: second sync - table empty";
+
+    return true;
+};
+
+fiber:b: f = run();
+b: ok = f.next();
+if (ok) then;
+    >! "=== sql_schema: ALL TESTS PASSED ===";
+els;
+    >! "=== sql_schema: ERROR ===";
+end;

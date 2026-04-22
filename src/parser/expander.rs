@@ -110,9 +110,9 @@ impl<'a> Expander<'a> {
             StmtKind::Assign { value, .. } => self.expand_expr_inplace(value),
             StmtKind::FunctionDef { body, .. } => { for s in body.iter_mut() { self.expand_stmt_inplace(s); } }
             StmtKind::FiberDef { body, .. } => { for s in body.iter_mut() { self.expand_stmt_inplace(s); } }
-            StmtKind::Print(e) | StmtKind::ExprStmt(e) | StmtKind::Return(Some(e)) | StmtKind::Yield(e) => self.expand_expr_inplace(e),
+            StmtKind::Print(e) | StmtKind::TerminalWrite(e) | StmtKind::ExprStmt(e) | StmtKind::Return(Some(e)) | StmtKind::Yield(e) => self.expand_expr_inplace(e),
             StmtKind::FiberDecl { args, .. } => {
-                for a in args.iter_mut() { self.expand_expr_inplace(a); }
+                for a in args.iter_mut() { self.expand_expr_inplace(a.expr_mut()); }
             }
             StmtKind::YieldFrom(e) => self.expand_expr_inplace(e),
             StmtKind::If { condition, then_branch, else_ifs, else_branch } => {
@@ -127,7 +127,7 @@ impl<'a> Expander<'a> {
                if let Some(s) = step { self.expand_expr_inplace(s); }
                for s in body.iter_mut() { self.expand_stmt_inplace(s); }
             }
-            StmtKind::FunctionCallStmt { args, .. } => { for a in args.iter_mut() { self.expand_expr_inplace(a); } }
+            StmtKind::FunctionCallStmt { args, .. } => { for a in args.iter_mut() { self.expand_expr_inplace(a.expr_mut()); } }
             StmtKind::JsonBind { json, path, .. } => { self.expand_expr_inplace(json); self.expand_expr_inplace(path); }
             StmtKind::JsonInject { json, mapping, .. } => { self.expand_expr_inplace(json); self.expand_expr_inplace(mapping); }
             StmtKind::NetRequestStmt { method, url, headers, body, timeout, .. } => {
@@ -151,10 +151,10 @@ impl<'a> Expander<'a> {
         match &mut expr.kind {
             ExprKind::Binary { left, right, .. } => { self.expand_expr_inplace(left); self.expand_expr_inplace(right); }
             ExprKind::Unary { right, .. } => self.expand_expr_inplace(right),
-            ExprKind::FunctionCall { args, .. } => { for a in args.iter_mut() { self.expand_expr_inplace(a); } }
-            ExprKind::MethodCall { receiver, method, args } => {
+            ExprKind::FunctionCall { args, .. } => { for a in args.iter_mut() { self.expand_expr_inplace(a.expr_mut()); } }
+            ExprKind::MethodCall { receiver, method, args, wait_after: _ } => {
                 self.expand_expr_inplace(receiver);
-                for a in args.iter_mut() { self.expand_expr_inplace(a); }
+                for a in args.iter_mut() { self.expand_expr_inplace(a.expr_mut()); }
                 
                 let mut rewrite = None;
                 if let ExprKind::Identifier(id) = &receiver.kind {
@@ -228,8 +228,8 @@ impl<'a> Expander<'a> {
                 for e in elements.iter_mut() { self.expand_expr_inplace(e); }
             }
             ExprKind::Lambda { body, .. } => self.expand_expr_inplace(body),
-            ExprKind::TerminalCommand(_, arg) => {
-                if let Some(a) = arg { self.expand_expr_inplace(a); }
+            ExprKind::TerminalCommand(_, args) => {
+                for a in args { self.expand_expr_inplace(a); }
             }
             _ => {}
         }
@@ -299,7 +299,7 @@ impl<'a> Expander<'a> {
                     *fiber_name = self.prefix_id(*fiber_name, prefix);
                 }
                 for arg in args.iter_mut() {
-                    self.prefix_expr_impl(arg, prefix, top_level_names);
+                    self.prefix_expr_impl(arg.expr_mut(), prefix, top_level_names);
                 }
             }
             // prefix fiber constructor calls inside YieldFrom.
@@ -308,7 +308,7 @@ impl<'a> Expander<'a> {
             StmtKind::YieldFrom(expr) => {
                 self.prefix_expr_impl(expr, prefix, top_level_names);
             }
-            StmtKind::Print(expr) | StmtKind::ExprStmt(expr) | StmtKind::Return(Some(expr)) | StmtKind::Yield(expr) => {
+            StmtKind::Print(expr) | StmtKind::TerminalWrite(expr) | StmtKind::ExprStmt(expr) | StmtKind::Return(Some(expr)) | StmtKind::Yield(expr) => {
                 self.prefix_expr_impl(expr, prefix, top_level_names);
             }
             StmtKind::If { condition, then_branch, else_ifs, else_branch } => {
@@ -339,12 +339,12 @@ impl<'a> Expander<'a> {
                 if top_level_names.contains(name) {
                     *name = self.prefix_id(*name, prefix);
                 }
-                for arg in args { self.prefix_expr_impl(arg, prefix, top_level_names); }
+                for arg in args { self.prefix_expr_impl(arg.expr_mut(), prefix, top_level_names); }
             }
             StmtKind::Halt { message, .. } => {
                 self.prefix_expr_impl(message, prefix, top_level_names);
             }
-            StmtKind::Input(id) => {
+            StmtKind::Input(id, _) => {
                 if top_level_names.contains(id) {
                     *id = self.prefix_id(*id, prefix);
                 }
@@ -401,11 +401,11 @@ impl<'a> Expander<'a> {
                 if top_level_names.contains(name) {
                     *name = self.prefix_id(*name, prefix);
                 }
-                for arg in args { self.prefix_expr_impl(arg, prefix, top_level_names); }
+                for arg in args { self.prefix_expr_impl(arg.expr_mut(), prefix, top_level_names); }
             }
-            ExprKind::MethodCall { receiver, method, args } => {
+            ExprKind::MethodCall { receiver, method, args, .. } => {
                 self.prefix_expr_impl(receiver, prefix, top_level_names);
-                for arg in args { self.prefix_expr_impl(arg, prefix, top_level_names); }
+                for arg in args { self.prefix_expr_impl(arg.expr_mut(), prefix, top_level_names); }
                 let _ = method;
             }
             ExprKind::MemberAccess { receiver, member } => {
@@ -429,8 +429,8 @@ impl<'a> Expander<'a> {
             ExprKind::RandomChoice { set } => {
                 self.prefix_expr_impl(set, prefix, top_level_names);
             }
-            ExprKind::TerminalCommand(_, arg) => {
-                if let Some(a) = arg { self.prefix_expr_impl(a, prefix, top_level_names); }
+            ExprKind::TerminalCommand(_, args) => {
+                for a in args { self.prefix_expr_impl(a, prefix, top_level_names); }
             }
             _ => {}
         }

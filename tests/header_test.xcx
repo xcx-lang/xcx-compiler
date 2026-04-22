@@ -1,0 +1,32 @@
+--- header_test.xcx - Verify DoubleColon operator
+func main() {
+    s: key = "X-PAX-TOKEN";
+    s: val = "my-secret-token";
+    
+    --- Use :: operator
+    s: pair = key :: val;
+    >! "Pair: " + pair;
+    
+    if (pair == "X-PAX-TOKEN :: my-secret-token") then;
+        >! "Test PASSED: DoubleColon correctly concatenated with ' :: '";
+    else;
+        halt.error >! "Test FAILED: Expected 'X-PAX-TOKEN :: my-secret-token', got '" + pair + "'";
+    end;
+
+    --- Test in array context (as used in net.request headers)
+    array:s: headers = ["Header1" :: "Val1", "Header2" :: "Val2"];
+    >! "Headers array: " + headers.toStr();
+    
+    if (headers.size() == 2) then;
+        >! "Test PASSED: Array has 2 elements";
+        if (headers.get(0) == "Header1 :: Val1" AND headers.get(1) == "Header2 :: Val2") then;
+            >! "Test PASSED: Array elements are correct";
+        else;
+            halt.error >! "Test FAILED: Array elements are incorrect: " + headers.toStr();
+        end;
+    else;
+        halt.error >! "Test FAILED: Expected array of size 2, got " + s(headers.size());
+    end;
+};
+
+main();

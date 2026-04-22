@@ -26,4 +26,5 @@ else;
     halt.error >! "Store Append mismatch: " + store.read(f_name);
 end;
 
+store.delete(f_name);
 >! "12. STORE & SECURITY: SUCCESS";

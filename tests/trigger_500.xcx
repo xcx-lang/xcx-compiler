@@ -1,0 +1,3 @@
+--- Tests the /api/users endpoint
+json: resp = net.get("http://localhost:8080/api/users");
+>! "Response: " + resp.to_str();

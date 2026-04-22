@@ -1,0 +1,24 @@
+--- Test random.choice from array
+
+--- 1. Picking from an array of integers
+array:i: ids {101, 202, 303, 404, 505};
+i: p1 = random.choice from ids;
+>! p1;
+
+--- 2. Picking from an array of strings
+array:s: names {"Alice", "Bob", "Charlie", "Diana"};
+s: p2 = random.choice from names;
+>! p2;
+
+--- 3. Picking from an empty array
+array:i: empty {};
+i: p3 = random.choice from empty;
+>! p3;
+
+--- 4. Multiple picks from the same array to verify randomness
+i: cnt = 0;
+while (cnt < 5) do;
+    i: pick = random.choice from ids;
+    >! "Pick " + cnt + ": " + pick;
+    cnt = cnt + 1;
+end;

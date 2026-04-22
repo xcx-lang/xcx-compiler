@@ -1,0 +1,61 @@
+database: db {
+    engine = "sqlite",
+    path   = "test_exec.db"
+};
+
+table: items {
+    columns = [
+        id    :: i @auto @pk,
+        label :: s,
+        score :: i
+    ]
+    rows = [EMPTY]
+};
+
+fiber run(-> b) {
+    yield db.sync(items);
+    yield db.truncate(items);
+
+    yield db.insert(items, "alpha", 10);
+    yield db.insert(items, "beta",  20);
+    yield db.insert(items, "gamma", 30);
+
+    yield db.exec("UPDATE [items] SET score = ? WHERE label = ?", [99, "beta"]) as upd;
+    if (upd.affected != 1) then;
+        >! "FAIL: UPDATE should change 1 row, changed " + s(upd.affected);
+        return false;
+    end;
+    >! "PASS: exec UPDATE affected=" + s(upd.affected);
+
+    table: check = yield db.fetch(items).where(label == "beta");
+    i: new_score = check[0].score;
+    if (new_score != 99) then;
+        >! "FAIL: score after UPDATE should be 99, is " + s(new_score);
+        return false;
+    end;
+    >! "PASS: score after UPDATE = " + s(new_score);
+
+    yield db.exec("DELETE FROM [items] WHERE score < ?", [25]) as del;
+    if (del.affected != 2) then;
+        >! "FAIL: DELETE should remove 2 rows, removed " + s(del.affected);
+        return false;
+    end;
+    >! "PASS: exec DELETE affected=" + s(del.affected);
+
+    table: after_del = yield db.fetch(items);
+    if (after_del.count() != 1) then;
+        >! "FAIL: after DELETE should be 1 row, is " + s(after_del.count());
+        return false;
+    end;
+    >! "PASS: after DELETE " + s(after_del.count()) + " row remains";
+
+    return true;
+};
+
+fiber:b: f = run();
+b: ok = f.next();
+if (ok) then;
+    >! "=== sql_exec: ALL TESTS PASSED ===";
+els;
+    >! "=== sql_exec: ERROR ===";
+end;

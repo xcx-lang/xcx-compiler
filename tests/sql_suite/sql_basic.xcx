@@ -1,0 +1,75 @@
+database: db {
+    engine = "sqlite",
+    path   = "test_basic.db"
+};
+
+table: users {
+    columns = [
+        id    :: i @auto @pk,
+        name  :: s @unique,
+        age   :: i,
+        email :: s @optional
+    ]
+    rows = [EMPTY]
+};
+
+fiber run(-> b) {
+    yield db.sync(users);
+    yield db.truncate(users);
+
+    yield db.insert(users, "Alice", 25, "alice@test.com") as r1;
+    if (r1.insertId == 0) then;
+        >! "FAIL: insertId should be > 0";
+        return false;
+    end;
+    >! "PASS: positional INSERT, ID=" + s(r1.insertId);
+
+    yield db.insert(users, name = "Bob", age = 30) as r2;
+    if (r2.insertId == 0) then;
+        >! "FAIL: named INSERT - missing insertId";
+        return false;
+    end;
+    >! "PASS: named INSERT, ID=" + s(r2.insertId);
+
+    yield db.insert(users, "Charlie", age = 22) as r3;
+    >! "PASS: mixed INSERT, ID=" + s(r3.insertId);
+
+    table: all = yield db.fetch(users);
+    if (all.count() != 3) then;
+        >! "FAIL: expected 3 rows, got " + s(all.count());
+        return false;
+    end;
+    >! "PASS: FETCH returned 3 rows";
+
+    table: young = yield db.fetch(users).where(age < 28);
+    if (young.count() != 2) then;
+        >! "FAIL: WHERE age < 28 should return 2, got " + s(young.count());
+        return false;
+    end;
+    >! "PASS: FETCH WHERE age < 28 = " + s(young.count()) + " rows";
+
+    table: bobs = yield db.fetch(users).where(name == "Bob");
+    if (bobs.count() != 1) then;
+        >! "FAIL: WHERE name == 'Bob' should return 1";
+        return false;
+    end;
+    >! "PASS: FETCH WHERE name == 'Bob'";
+
+    yield db.truncate(users);
+    table: empty = yield db.fetch(users);
+    if (empty.count() != 0) then;
+        >! "FAIL: after truncate should be 0 rows";
+        return false;
+    end;
+    >! "PASS: TRUNCATE";
+
+    return true;
+};
+
+fiber:b: f = run();
+b: ok = f.next();
+if (ok) then;
+    >! "=== sql_basic: ALL TESTS PASSED ===";
+els;
+    >! "=== sql_basic: ERROR ===";
+end;

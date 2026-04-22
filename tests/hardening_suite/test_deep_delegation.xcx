@@ -11,7 +11,7 @@ fiber deep_delegator(i: n -> i) {
     return 0;
 };
 
-i: D = 50; --- High depth to stress the stack and delegation tracking
+i: D = 6000;
 >! "[Hardening] Stress test: Fiber delegation depth " + D;
 fiber:i: f = deep_delegator(D);
 i: last_val = -1;

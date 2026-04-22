@@ -1,4 +1,4 @@
---- Symulacja: tworzymy request ręcznie i sprawdzamy handler logicznie
+--- Simulation: manually create request and check handler logic
 fiber handle_ping(json: req -> json) {
     s: method;
     req.bind("method", method);
@@ -6,5 +6,3 @@ fiber handle_ping(json: req -> json) {
     resp.set("method", method);
     yield net.respond(200, resp);
 };
-
->! "handler zdefiniowany poprawnie";

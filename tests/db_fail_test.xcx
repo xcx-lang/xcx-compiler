@@ -1,0 +1,33 @@
+database: app { 
+    engine = "sqlite", 
+    path = "fail.db" 
+};
+
+table: users { 
+    columns = [
+        id :: i @auto @pk,
+        name :: s
+    ] 
+    rows = [EMPTY] 
+};
+
+fiber fail_tests(json: req -> json) {
+    --- D401: remove() requires .where()
+    --- Error: Database I/O method 'remove' must be yielded inside a fiber
+    --- Error: Rule D401: remove() requires .where() filter
+    app.remove(users);
+
+    --- 1.4: @auto provided
+    --- Error: Cannot provide value for @auto column 'id'
+    yield app.insert(users, id = 5, name = "Alice");
+
+    --- D401: yield remove() without .where()
+    --- Error: Rule D401: remove() requires .where() filter before yielding
+    yield app.remove(users);
+
+    --- Missing yield for I/O
+    --- Error: Database I/O method 'fetch' must be yielded inside a fiber
+    app.fetch(users);
+};
+
+>! "Running fail tests...";

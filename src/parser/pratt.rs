@@ -1,6 +1,6 @@
 use crate::lexer::scanner::Scanner;
 use crate::lexer::token::{Token, TokenKind, Span};
-use crate::parser::ast::{Expr, Stmt, Type, Program, SetType, SetRange};
+use crate::parser::ast::{Expr, Stmt, Type, Program, SetType, SetRange, Argument};
 use crate::sema::interner::Interner;
 use crate::sema::interner::StringId;
 
@@ -10,6 +10,7 @@ pub struct Parser<'a> {
     source: &'a str,
     current: Token,
     peek: Token,
+    previous: Token,
     pub has_error: bool,
 }
 
@@ -27,7 +28,9 @@ pub enum Precedence {
     Product,     // * / %
     Power,       // ^
     Prefix,      // -x
+    Concatenation, // ::
     Call,        // f(x)
+    AsPrec,      // as
 }
 
 impl<'a> Parser<'a> {
@@ -39,12 +42,14 @@ impl<'a> Parser<'a> {
     pub fn new_with_interner(source: &'a str, mut scanner: Scanner<'a>, mut interner: Interner) -> Self {
         let current = scanner.next_token(&mut interner);
         let peek = scanner.next_token(&mut interner);
+        let previous = current.clone(); 
         Self {
             scanner,
             interner,
             source,
             current,
             peek,
+            previous,
             has_error: false,
         }
     }
@@ -82,7 +87,19 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_semicolon(&mut self) -> bool {
-        self.expect(TokenKind::Semicolon, "Expected ';' at the end of the statement.")
+        if self.current.kind == TokenKind::Semicolon {
+            self.advance();
+            true
+        } else {
+            let msg = match self.previous.kind {
+                TokenKind::End => "Expected ';' after 'end'. Every block must be terminated with 'end;'.".to_string(),
+                TokenKind::Then => "Expected ';' after 'then'. Did you forget the semicolon?".to_string(),
+                TokenKind::Do => "Expected ';' after 'do'. Did you forget the semicolon?".to_string(),
+                _ => "Expected ';' at the end of the statement.".to_string(),
+            };
+            self.error(&msg);
+            false
+        }
     }
 
     fn parse_array_or_set_literal_elements(&mut self, end_kind: TokenKind) -> Vec<Expr> {
@@ -91,12 +108,10 @@ impl<'a> Parser<'a> {
             if let Some(expr) = self.parse_expression(Precedence::Lowest) {
                 elements.push(expr);
             }
-            // Expression parser stops AT the token after the expression (e.g. at Comma or RightBrace)
             self.advance(); 
             if self.current.kind == TokenKind::Comma {
                 self.advance();
             } else if self.current.kind != end_kind {
-                // If not comma and not end, something is wrong, but we'll let the loop check end
             }
         }
         elements
@@ -148,7 +163,7 @@ impl<'a> Parser<'a> {
         }
         
         if self.current.kind == TokenKind::RightBrace {
-            self.advance();
+            // Leave current on '}'
         }
         
         if is_range {
@@ -177,6 +192,7 @@ impl<'a> Parser<'a> {
     }
 
     fn advance(&mut self) {
+        self.previous = self.current.clone();
         self.current = self.peek.clone();
         self.peek = self.scanner.next_token(&mut self.interner);
     }
@@ -190,10 +206,12 @@ impl<'a> Parser<'a> {
             TokenKind::EqualEqual | TokenKind::BangEqual => Precedence::Equals,
             TokenKind::Less | TokenKind::Greater | TokenKind::LessEqual | TokenKind::GreaterEqual | TokenKind::Has => Precedence::LessGreater,
             TokenKind::Plus | TokenKind::Minus | TokenKind::PlusPlus => Precedence::Sum,
+            TokenKind::DoubleColon => Precedence::Concatenation,
             TokenKind::Union | TokenKind::Difference | TokenKind::SymDifference | TokenKind::Intersection => Precedence::SetOp,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::Product,
             TokenKind::Caret => Precedence::Power,
             TokenKind::Dot | TokenKind::LeftBracket => Precedence::Call,
+            TokenKind::As => Precedence::AsPrec,
             _ => Precedence::Lowest,
         }
     }
@@ -207,10 +225,12 @@ impl<'a> Parser<'a> {
             TokenKind::EqualEqual | TokenKind::BangEqual => Precedence::Equals,
             TokenKind::Less | TokenKind::Greater | TokenKind::LessEqual | TokenKind::GreaterEqual | TokenKind::Has => Precedence::LessGreater,
             TokenKind::Plus | TokenKind::Minus | TokenKind::PlusPlus => Precedence::Sum,
+            TokenKind::DoubleColon => Precedence::Concatenation,
             TokenKind::Union | TokenKind::Difference | TokenKind::SymDifference | TokenKind::Intersection => Precedence::SetOp,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::Product,
             TokenKind::Caret => Precedence::Power,
             TokenKind::Dot | TokenKind::LeftBracket => Precedence::Call,
+            TokenKind::As => Precedence::AsPrec,
             _ => Precedence::Lowest,
         }
     }
@@ -277,8 +297,8 @@ impl<'a> Parser<'a> {
 
         if allow_dots {
             while self.peek.kind == TokenKind::Dot {
-                self.advance(); // now at '.'
-                self.advance(); // now at next part
+                self.advance();
+                self.advance();
                 if let Some(part_id) = self.parse_identifier_as_string_id(false) {
                     text.push('.');
                     text.push_str(self.interner.lookup(part_id));
@@ -297,9 +317,11 @@ impl<'a> Parser<'a> {
 
     fn parse_statement_internal(&mut self) -> Option<Stmt> {
         match self.current.kind {
-            TokenKind::Const | TokenKind::TypeI | TokenKind::TypeF | TokenKind::TypeS | TokenKind::TypeB | TokenKind::Array | TokenKind::Set | TokenKind::Map | TokenKind::Date | TokenKind::Table | TokenKind::Json => {
+            TokenKind::Const | TokenKind::TypeI | TokenKind::TypeF | TokenKind::TypeS | TokenKind::TypeB | TokenKind::Array | TokenKind::Set | TokenKind::Map | TokenKind::Date | TokenKind::Table | TokenKind::Json | TokenKind::Database => {
                 if self.peek.kind == TokenKind::Equal {
                     self.parse_assignment()
+                } else if self.peek.kind == TokenKind::Dot || self.peek.kind == TokenKind::LeftParen || self.peek.kind == TokenKind::LeftBracket {
+                    self.parse_expr_stmt()
                 } else {
                     self.parse_var_decl()
                 }
@@ -332,6 +354,15 @@ impl<'a> Parser<'a> {
                 self.parse_continue_statement()
             }
             TokenKind::Dot => {
+                let span = self.current.span.clone();
+                if let Some(expr) = self.parse_terminal_expression() {
+                    self.advance();
+                    self.expect_semicolon();
+                    return Some(Stmt {
+                        kind: crate::parser::ast::StmtKind::ExprStmt(expr),
+                        span,
+                    });
+                }
                 self.parse_expr_stmt()
             }
             TokenKind::Func => {
@@ -367,8 +398,8 @@ impl<'a> Parser<'a> {
                     self.parse_assignment()
                 } else if peek_kind == TokenKind::LeftParen {
                     self.parse_func_call_stmt()
-                } else if matches!(peek_kind, TokenKind::Colon) && !matches!(self.current.kind, TokenKind::Identifier(_)) {
-                   self.parse_var_decl()
+                } else if matches!(peek_kind, TokenKind::Colon) {
+                    self.parse_var_decl()
                 } else {
                     self.parse_var_decl().or_else(|| self.parse_expr_stmt())
                 }
@@ -381,22 +412,22 @@ impl<'a> Parser<'a> {
 
     fn parse_wait_stmt(&mut self) -> Option<Stmt> {
         let span = self.current.span.clone();
-        self.advance(); // past '@wait'
+        self.advance();
 
         let has_parens = self.current.kind == TokenKind::LeftParen;
         if has_parens {
-            self.advance(); // past '('
+            self.advance();
         }
         
         let ms_expr = self.parse_expression(Precedence::Lowest)?;
-        self.advance(); // past last token of expression
+        self.advance();
         
         if has_parens {
             if self.current.kind != TokenKind::RightParen {
                 self.error("Expected ')' to close '@wait(...)'.");
                 return None;
             }
-            self.advance(); // past ')'
+            self.advance();
         }
         self.expect_semicolon();
         
@@ -405,13 +436,13 @@ impl<'a> Parser<'a> {
 
     fn parse_net_stmt(&mut self) -> Option<Stmt> {
         let span = self.current.span.clone();
-        self.advance(); // past 'net'
+        self.advance();
 
         if self.current.kind != TokenKind::Dot {
             self.error("Expected '.' after 'net'.");
             return None;
         }
-        self.advance(); // past '.'
+        self.advance();
 
         let method_name = if let TokenKind::Identifier(id) = self.current.kind {
             self.interner.lookup(id).to_string()
@@ -419,10 +450,9 @@ impl<'a> Parser<'a> {
             self.error("Expected method name after 'net.'.");
             return None;
         };
-        self.advance(); // past method name
+        self.advance();
 
         match method_name.as_str() {
-            // added patch, head, options
             "get" | "post" | "put" | "delete" | "patch" | "head" | "options" => {
                 let method_id = self.interner.intern(&method_name);
 
@@ -430,33 +460,33 @@ impl<'a> Parser<'a> {
                     self.error(&format!("Expected '(' after 'net.{}'.", method_name));
                     return None;
                 }
-                self.advance(); // past '('
+                self.advance();
 
                 let url = self.parse_expression(Precedence::Lowest)?;
-                self.advance(); // past url
+                self.advance();
 
                 let mut body = None;
                 if self.current.kind == TokenKind::Comma {
-                    self.advance(); // past ','
+                    self.advance();
                     body = Some(Box::new(self.parse_expression(Precedence::Lowest)?));
-                    self.advance(); // past body
+                    self.advance();
                 }
 
                 if self.current.kind != TokenKind::RightParen {
                     self.error(&format!("Expected ')' after 'net.{}' arguments.", method_name));
                     return None;
                 }
-                self.advance(); // past ')'
+                self.advance();
 
                 if self.current.kind == TokenKind::As {
-                    self.advance(); // past 'as'
+                    self.advance();
                     let target = if let TokenKind::Identifier(t_id) = self.current.kind {
                         t_id
                     } else {
                         self.error("Expected identifier after 'as'.");
                         return None;
                     };
-                    self.advance(); // past target
+                    self.advance();
                     self.expect_semicolon();
                     return Some(Stmt {
                         kind: crate::parser::ast::StmtKind::NetRequestStmt {
@@ -474,8 +504,6 @@ impl<'a> Parser<'a> {
                     });
                 }
 
-                // No 'as' — just a statement expression
-                self.expect_semicolon();
                 Some(Stmt {
                     kind: crate::parser::ast::StmtKind::ExprStmt(crate::parser::ast::Expr {
                         kind: crate::parser::ast::ExprKind::NetCall {
@@ -567,7 +595,6 @@ impl<'a> Parser<'a> {
                 }
 
                 // net.request without 'as' — not useful but don't crash
-                self.expect_semicolon();
                 None
             }
 
@@ -684,7 +711,9 @@ impl<'a> Parser<'a> {
             self.advance(); // move past 'then'
         }
 
-        self.expect_semicolon();
+        if self.current.kind == TokenKind::Semicolon {
+            self.advance();
+        }
         
         let mut then_branch = Vec::new();
         while self.current.kind != TokenKind::ElseIf && 
@@ -744,7 +773,9 @@ impl<'a> Parser<'a> {
         let mut else_branch = None;
         if self.current.kind == TokenKind::Else {
             self.advance(); // past 'else'
-            self.expect_semicolon();
+            if self.current.kind == TokenKind::Semicolon {
+                self.advance();
+            }
             
             let mut branch = Vec::new();
             while self.current.kind != TokenKind::End && self.current.kind != TokenKind::EOF {
@@ -759,7 +790,9 @@ impl<'a> Parser<'a> {
 
         if self.current.kind == TokenKind::End {
             self.advance(); // past 'end'
-            self.expect_semicolon();
+            if self.current.kind == TokenKind::Semicolon {
+                self.advance();
+            }
             
             return Some(Stmt {
                 kind: crate::parser::ast::StmtKind::If {
@@ -794,7 +827,9 @@ impl<'a> Parser<'a> {
         if self.current.kind != TokenKind::Do { return None; }
         self.advance(); // past 'do'
         
-        self.expect_semicolon();
+        if self.current.kind == TokenKind::Semicolon {
+            self.advance();
+        }
 
         let mut body = Vec::new();
         while self.current.kind != TokenKind::End && self.current.kind != TokenKind::EOF {
@@ -807,7 +842,9 @@ impl<'a> Parser<'a> {
 
         if self.current.kind == TokenKind::End {
             self.advance();
-            self.expect_semicolon();
+            if self.current.kind == TokenKind::Semicolon {
+                self.advance();
+            }
         }
 
         Some(Stmt {
@@ -858,7 +895,9 @@ impl<'a> Parser<'a> {
         if self.current.kind != TokenKind::Do { return None; }
         self.advance(); // past 'do'
 
-        self.expect_semicolon();
+        if self.current.kind == TokenKind::Semicolon {
+            self.advance();
+        }
 
         let mut body = Vec::new();
         while self.current.kind != TokenKind::End && self.current.kind != TokenKind::EOF {
@@ -871,7 +910,9 @@ impl<'a> Parser<'a> {
 
         if self.current.kind == TokenKind::End {
             self.advance();
-            self.expect_semicolon();
+            if self.current.kind == TokenKind::Semicolon {
+                self.advance();
+            }
         }
 
         Some(Stmt {
@@ -931,42 +972,42 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expression(Precedence::Lowest)?;
         self.advance(); // past last token of expr
         
-        let kind = if let crate::parser::ast::ExprKind::MethodCall { receiver, method, args } = expr.kind {
+        let kind = if let crate::parser::ast::ExprKind::MethodCall { receiver, method, args, wait_after: _ } = expr.kind {
             if method == self.interner.intern("bind") && args.len() == 2 {
-                if let crate::parser::ast::ExprKind::Identifier(target) = args[1].kind {
+                if let crate::parser::ast::ExprKind::Identifier(target) = &args[1].expr().kind {
                     crate::parser::ast::StmtKind::JsonBind {
                         json: receiver,
-                        path: Box::new(args[0].clone()),
-                        target,
+                        path: Box::new(args[0].expr().clone()),
+                        target: *target,
                     }
                 } else {
                     crate::parser::ast::StmtKind::ExprStmt(crate::parser::ast::Expr {
-                        kind: crate::parser::ast::ExprKind::MethodCall { receiver, method, args },
+                        kind: crate::parser::ast::ExprKind::MethodCall { receiver, method, args, wait_after: false },
                         span: expr.span,
                     })
                 }
             } else if method == self.interner.intern("inject") && args.len() == 2 {
-                 if let crate::parser::ast::ExprKind::Identifier(table_id) = args[1].kind {
+                 if let crate::parser::ast::ExprKind::Identifier(table_id) = &args[1].expr().kind {
                     crate::parser::ast::StmtKind::JsonInject {
                         json: receiver,
-                        mapping: Box::new(args[0].clone()),
-                        table: table_id,
+                        mapping: Box::new(args[0].expr().clone()),
+                        table: *table_id,
                     }
-                } else if let crate::parser::ast::ExprKind::StringLiteral(table_name) = args[1].kind {
+                } else if let crate::parser::ast::ExprKind::StringLiteral(table_name) = &args[1].expr().kind {
                     crate::parser::ast::StmtKind::JsonInject {
                         json: receiver,
-                        mapping: Box::new(args[0].clone()),
-                        table: table_name,
+                        mapping: Box::new(args[0].expr().clone()),
+                        table: *table_name,
                     }
                 } else {
                     crate::parser::ast::StmtKind::ExprStmt(crate::parser::ast::Expr {
-                        kind: crate::parser::ast::ExprKind::MethodCall { receiver, method, args },
+                        kind: crate::parser::ast::ExprKind::MethodCall { receiver, method, args, wait_after: false },
                         span: expr.span,
                     })
                 }
             } else {
                 crate::parser::ast::StmtKind::ExprStmt(crate::parser::ast::Expr {
-                    kind: crate::parser::ast::ExprKind::MethodCall { receiver, method, args },
+                    kind: crate::parser::ast::ExprKind::MethodCall { receiver, method, args, wait_after: false },
                     span: expr.span,
                 })
             }
@@ -1015,6 +1056,7 @@ impl<'a> Parser<'a> {
 
         let is_map = matches!(ty, Type::Map(_, _));
         let is_table = matches!(ty, Type::Table(_));
+        let is_database = matches!(ty, Type::Database);
 
         if self.current.kind == TokenKind::Colon {
             self.advance(); // past ':'
@@ -1037,6 +1079,7 @@ impl<'a> Parser<'a> {
                 if let crate::parser::ast::ExprKind::MapLiteral { ref key_type, ref value_type, .. } = map_lit.kind {
                     ty = Type::Map(Box::new(key_type.clone()), Box::new(value_type.clone()));
                 }
+                self.advance();
                 self.expect_semicolon();
                 Some(map_lit)
             } else {
@@ -1054,8 +1097,24 @@ impl<'a> Parser<'a> {
                 if let crate::parser::ast::ExprKind::TableLiteral { ref columns, .. } = table_lit.kind {
                     ty = Type::Table(columns.clone());
                 }
+                self.advance();
                 self.expect_semicolon();
                 Some(table_lit)
+            } else {
+                let val = self.parse_expression(Precedence::Lowest)?;
+                self.advance();
+                self.expect_semicolon();
+                Some(val)
+            }
+        } else if is_database {
+            if self.current.kind == TokenKind::Equal {
+                self.advance();
+            }
+            if self.current.kind == TokenKind::LeftBrace || self.current.kind == TokenKind::Database {
+                let db_lit = self.parse_database_literal()?;
+                self.advance();
+                self.expect_semicolon();
+                Some(db_lit)
             } else {
                 let val = self.parse_expression(Precedence::Lowest)?;
                 self.advance();
@@ -1078,7 +1137,8 @@ impl<'a> Parser<'a> {
                     kind: crate::parser::ast::ExprKind::MethodCall {
                         receiver: Box::new(crate::parser::ast::Expr { kind: crate::parser::ast::ExprKind::Identifier(json_target), span: span.clone() }),
                         method: parse_method,
-                        args: vec![val.clone()],
+                        args: vec![crate::parser::ast::Argument::Positional(val.clone())],
+                        wait_after: false,
                     },
                     span: span.clone(),
                 };
@@ -1127,7 +1187,7 @@ impl<'a> Parser<'a> {
                             if let Some(expr) = self.parse_expression(Precedence::Lowest) {
                                 elements.push(expr);
                             }
-                            self.advance();
+                            if self.current.kind != TokenKind::Semicolon { self.advance(); }
                             if self.current.kind == TokenKind::Comma {
                                 self.advance();
                             }
@@ -1192,7 +1252,7 @@ impl<'a> Parser<'a> {
         self.expect_semicolon();
         
         Some(Stmt {
-            kind: crate::parser::ast::StmtKind::Input(name),
+            kind: crate::parser::ast::StmtKind::Input(name, crate::parser::ast::Type::Unknown),
             span,
         })
     }
@@ -1318,9 +1378,7 @@ impl<'a> Parser<'a> {
             }
             if self.current.kind == TokenKind::End {
                 self.advance();
-                if self.current.kind == TokenKind::Semicolon {
-                    self.advance();
-                }
+                self.expect_semicolon();
             }
         } else {
             if self.current.kind != TokenKind::LeftBrace { return None; }
@@ -1505,15 +1563,7 @@ impl<'a> Parser<'a> {
         }
         self.advance(); // past '('
 
-        let mut args = Vec::new();
-        while self.current.kind != TokenKind::RightParen && self.current.kind != TokenKind::EOF {
-            let arg = self.parse_expression(Precedence::Lowest)?;
-            args.push(arg);
-            self.advance();
-            if self.current.kind == TokenKind::Comma {
-                self.advance();
-            }
-        }
+        let args = self.parse_arguments();
 
         if self.current.kind == TokenKind::RightParen {
             self.advance(); // past ')'
@@ -1700,22 +1750,37 @@ impl<'a> Parser<'a> {
         Some(Stmt { kind: crate::parser::ast::StmtKind::Return(value), span })
     }
 
+    fn parse_arguments(&mut self) -> Vec<Argument> {
+        let mut args = Vec::new();
+        while self.current.kind != TokenKind::RightParen && self.current.kind != TokenKind::EOF {
+            if matches!(self.current.kind, TokenKind::Identifier(_)) && self.peek.kind == TokenKind::Equal {
+                let name = if let TokenKind::Identifier(id) = self.current.kind { id } else { unreachable!() };
+                self.advance(); // past identifier
+                self.advance(); // past '='
+                if let Some(expr) = self.parse_expression(Precedence::Lowest) {
+                    args.push(Argument::Named(name, expr));
+                }
+            } else {
+                if let Some(expr) = self.parse_expression(Precedence::Lowest) {
+                    args.push(Argument::Positional(expr));
+                }
+            }
+            
+            self.advance();
+            if self.current.kind == TokenKind::Comma {
+                self.advance();
+            }
+        }
+        args
+    }
+
     fn parse_func_call_stmt(&mut self) -> Option<Stmt> {
         let span = self.current.span.clone();
         let name = if let Some(id) = self.parse_identifier_as_string_id(true) { id } else { return None; };
         self.advance(); // past name
         self.advance(); // past '('
 
-        let mut args = Vec::new();
-        while self.current.kind != TokenKind::RightParen && self.current.kind != TokenKind::EOF {
-            if let Some(arg) = self.parse_expression(Precedence::Lowest) {
-                args.push(arg);
-            }
-            self.advance();
-            if self.current.kind == TokenKind::Comma {
-                self.advance();
-            }
-        }
+        let args = self.parse_arguments();
 
         if self.current.kind == TokenKind::RightParen {
             self.advance(); // past ')'
@@ -1742,39 +1807,6 @@ impl<'a> Parser<'a> {
     fn parse_prefix(&mut self) -> Option<Expr> {
         let span = self.current.span.clone();
         match &self.current.kind {
-        TokenKind::Dot => {
-            if self.peek.kind == TokenKind::Terminal {
-                self.advance(); 
-                self.advance(); 
-        
-                if self.current.kind != TokenKind::Bang { return None; }
-                self.advance(); 
-        
-                let command = if let Some(id) = self.parse_identifier_as_string_id(false) {
-                    id
-                } else {
-                    return None;
-        };
-        let mut arg = None;
-        if self.peek.kind != TokenKind::Semicolon 
-            && self.peek.kind != TokenKind::RightParen 
-            && self.peek.kind != TokenKind::Comma
-            && self.peek.kind != TokenKind::EOF
-        {
-            self.advance(); 
-            if let Some(expr) = self.parse_expression(Precedence::Lowest) {
-                arg = Some(Box::new(expr));
-            }
-        }
-        
-        Some(Expr {
-            kind: crate::parser::ast::ExprKind::TerminalCommand(command, arg),
-            span,
-        })
-    } else {
-        None
-    }
-            }
             TokenKind::Identifier(_) | TokenKind::TypeI | TokenKind::TypeF | TokenKind::TypeS | TokenKind::TypeB | TokenKind::Halt | TokenKind::Store | TokenKind::Terminal | TokenKind::Json | TokenKind::Choice |
             TokenKind::TypeSetN | TokenKind::TypeSetQ | TokenKind::TypeSetZ | TokenKind::TypeSetS | TokenKind::TypeSetB | TokenKind::TypeSetC => {
                 let id_val = if let Some(id) = self.parse_identifier_as_string_id(false) {
@@ -1786,16 +1818,7 @@ impl<'a> Parser<'a> {
                 if self.peek.kind == TokenKind::LeftParen {
                     self.advance(); // past identifier to '('
                     self.advance(); // past '('
-                    let mut args = Vec::new();
-                    while self.current.kind != TokenKind::RightParen && self.current.kind != TokenKind::EOF {
-                        if let Some(arg) = self.parse_expression(Precedence::Lowest) {
-                            args.push(arg);
-                        }
-                        self.advance();
-                        if self.current.kind == TokenKind::Comma {
-                            self.advance();
-                        }
-                    }
+                    let args = self.parse_arguments();
                     Some(Expr {
                         kind: crate::parser::ast::ExprKind::FunctionCall { name: id_val, args },
                         span: id_span,
@@ -1993,19 +2016,96 @@ impl<'a> Parser<'a> {
                 self.advance(); // past 'random'
                 if self.current.kind != TokenKind::Dot { return None; }
                 self.advance(); // past '.'
-                if self.current.kind != TokenKind::Choice { return None; }
-                self.advance(); // past 'choice'
-                if self.current.kind != TokenKind::From { return None; }
-                self.advance(); // past 'from'
                 
-                let set_expr = self.parse_expression(Precedence::Lowest)?;
+                let method = match self.current.kind {
+                    TokenKind::Identifier(id) => self.interner.lookup(id).to_string(),
+                    TokenKind::Choice => "choice".to_string(),
+                    TokenKind::TypeI => "int".to_string(),
+                    TokenKind::TypeF => "float".to_string(),
+                    _ => return None,
+                };
                 
-                Some(Expr {
-                    kind: crate::parser::ast::ExprKind::RandomChoice {
-                        set: Box::new(set_expr),
-                    },
-                    span,
-                })
+                match method.as_str() {
+                    "int" => {
+                        self.advance(); // past 'int'
+                        if self.current.kind != TokenKind::LeftParen { return None; }
+                        self.advance(); // past '('
+                        
+                        let min = self.parse_expression(Precedence::Lowest)?;
+                        self.advance();
+                        if self.current.kind != TokenKind::Comma { return None; }
+                        self.advance();
+                        let max = self.parse_expression(Precedence::Lowest)?;
+                        self.advance();
+                        
+                        let mut step = None;
+                        if self.current.kind == TokenKind::AtStep {
+                            self.advance();
+                            let s = self.parse_expression(Precedence::Lowest)?;
+                            self.advance();
+                            step = Some(Box::new(s));
+                        }
+                        
+                        if self.current.kind != TokenKind::RightParen { return None; }
+                        // Leave on ')'
+                        
+                        Some(Expr {
+                            kind: crate::parser::ast::ExprKind::RandomInt {
+                                min: Box::new(min),
+                                max: Box::new(max),
+                                step,
+                            },
+                            span,
+                        })
+                    }
+                    "float" => {
+                        self.advance(); // past 'float'
+                        if self.current.kind != TokenKind::LeftParen { return None; }
+                        self.advance(); // past '('
+                        
+                        let min = self.parse_expression(Precedence::Lowest)?;
+                        self.advance();
+                        if self.current.kind != TokenKind::Comma { return None; }
+                        self.advance();
+                        let max = self.parse_expression(Precedence::Lowest)?;
+                        self.advance();
+                        
+                        let mut step = None;
+                        if self.current.kind == TokenKind::AtStep {
+                            self.advance();
+                            let s = self.parse_expression(Precedence::Lowest)?;
+                            self.advance();
+                            step = Some(Box::new(s));
+                        }
+                        
+                        if self.current.kind != TokenKind::RightParen { return None; }
+                        // Leave on ')'
+                        
+                        Some(Expr {
+                            kind: crate::parser::ast::ExprKind::RandomFloat {
+                                min: Box::new(min),
+                                max: Box::new(max),
+                                step,
+                            },
+                            span,
+                        })
+                    }
+                    "choice" => {
+                        self.advance(); // past 'choice'
+                        if self.current.kind != TokenKind::From { return None; }
+                        self.advance(); // past 'from'
+                        
+                        let set_expr = self.parse_expression(Precedence::Lowest)?;
+                        
+                        Some(Expr {
+                            kind: crate::parser::ast::ExprKind::RandomChoice {
+                                set: Box::new(set_expr),
+                            },
+                            span,
+                        })
+                    }
+                    _ => None,
+                }
             }
             TokenKind::Date => {
                 let span = self.current.span.clone();
@@ -2139,6 +2239,33 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Map => self.parse_map_literal(),
             TokenKind::Table => self.parse_table_literal(),
+            TokenKind::Database => self.parse_database_literal(),
+            TokenKind::Yield => {
+                self.advance(); // past 'yield'
+                let expr = self.parse_expression(Precedence::Prefix)?;
+                Some(Expr {
+                    kind: crate::parser::ast::ExprKind::Yield(Box::new(expr)),
+                    span,
+                })
+            }
+            TokenKind::Unknown(c) if *c == '@' => {
+                self.error("Unexpected '@' - unrecognized prefix command.");
+                return None;
+            }
+            TokenKind::Tag(id) => {
+                let id = *id;
+                self.advance();
+                Some(Expr {
+                    kind: crate::parser::ast::ExprKind::Tag(id),
+                    span,
+                })
+            }
+            TokenKind::Dot => {
+                if self.peek.kind == TokenKind::Terminal {
+                    return self.parse_terminal_expression();
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -2153,6 +2280,38 @@ impl<'a> Parser<'a> {
         }
         if op == TokenKind::Arrow {
              return self.parse_lambda_infix(left);
+        }
+        if op == TokenKind::As {
+            let span = left.span.clone();
+            self.advance(); // past 'as'
+            
+            // Supporting both as(var) and as var
+            let name = if self.current.kind == TokenKind::LeftParen {
+                self.advance(); // past '('
+                let id = if let TokenKind::Identifier(id) = self.current.kind {
+                    id
+                } else {
+                    self.error("Expected identifier in as(...)");
+                    return None;
+                };
+                self.advance();
+                if self.current.kind != TokenKind::RightParen {
+                    self.error("Expected ')' after identifier in as(...)");
+                    return None;
+                }
+                // Leave current on ')'
+                id
+            } else if let TokenKind::Identifier(id) = self.current.kind {
+                id
+            } else {
+                self.error("Expected identifier after 'as'");
+                return None;
+            };
+            
+            return Some(Expr {
+                kind: crate::parser::ast::ExprKind::As { expr: Box::new(left), name },
+                span,
+            });
         }
 
         let span = left.span.clone();
@@ -2205,21 +2364,16 @@ impl<'a> Parser<'a> {
         };
         
         if self.peek.kind == TokenKind::LeftParen {
-            self.advance(); // past member name, now at '('
+            self.advance(); // past identifier to '('
             self.advance(); // past '('
-            let mut args = Vec::new();
-            while self.current.kind != TokenKind::RightParen && self.current.kind != TokenKind::EOF {
-                if let Some(arg) = self.parse_expression(Precedence::Lowest) {
-                    args.push(arg);
-                }
+            let args = self.parse_arguments();
+            
+            let mut wait_after = false;
+            if self.peek.kind == TokenKind::AtWait {
+                self.advance(); // past ')' to '@wait'
+                wait_after = true;
+            } else {
                 
-                if self.peek.kind == TokenKind::Comma || self.peek.kind == TokenKind::RightParen {
-                    self.advance();
-                }
-
-                if self.current.kind == TokenKind::Comma {
-                    self.advance();
-                }
             }
             
             Some(Expr {
@@ -2227,6 +2381,7 @@ impl<'a> Parser<'a> {
                     receiver: Box::new(receiver),
                     method: member,
                     args,
+                    wait_after,
                 },
                 span,
             })
@@ -2259,7 +2414,7 @@ impl<'a> Parser<'a> {
     fn is_type_intro(&self, kind: &TokenKind) -> bool {
         matches!(kind, TokenKind::TypeI | TokenKind::TypeF | TokenKind::TypeS | TokenKind::TypeB | 
                  TokenKind::Date | TokenKind::Json | TokenKind::Set | TokenKind::Map | 
-                 TokenKind::Table | TokenKind::Fiber | TokenKind::Array)
+                 TokenKind::Table | TokenKind::Database | TokenKind::Fiber | TokenKind::Array)
     }
 
     fn parse_type(&mut self) -> Option<Type> {
@@ -2317,6 +2472,10 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Type::Table(Vec::new())
             }
+            TokenKind::Database => {
+                self.advance();
+                Type::Database
+            }
             TokenKind::Fiber => {
                 self.advance();
                 let inner = if self.current.kind == TokenKind::Colon {
@@ -2365,16 +2524,43 @@ impl<'a> Parser<'a> {
 
             let col_ty = self.parse_type()?;
             
-            let mut is_auto = false;
-            if self.current.kind == TokenKind::AtAuto {
-                is_auto = true;
-                self.advance();
+            let mut attributes = Vec::new();
+            while matches!(self.current.kind, TokenKind::AtAuto | TokenKind::AtPk | TokenKind::AtUnique | TokenKind::AtOptional | TokenKind::AtDefault | TokenKind::AtFk) {
+                match self.current.kind {
+                    TokenKind::AtAuto => { attributes.push(crate::parser::ast::ColumnAttribute::Auto); self.advance(); }
+                    TokenKind::AtPk => { attributes.push(crate::parser::ast::ColumnAttribute::PrimaryKey); self.advance(); }
+                    TokenKind::AtUnique => { attributes.push(crate::parser::ast::ColumnAttribute::Unique); self.advance(); }
+                    TokenKind::AtOptional => { attributes.push(crate::parser::ast::ColumnAttribute::Optional); self.advance(); }
+                    TokenKind::AtDefault => {
+                        self.advance(); // past '@default'
+                        if self.current.kind != TokenKind::LeftParen { break; }
+                        self.advance(); // past '('
+                        let val = self.parse_expression(Precedence::Lowest)?;
+                        self.advance();
+                        if self.current.kind == TokenKind::RightParen { self.advance(); }
+                        attributes.push(crate::parser::ast::ColumnAttribute::Default(val));
+                    }
+                    TokenKind::AtFk => {
+                        self.advance(); // past '@fk'
+                        if self.current.kind != TokenKind::LeftParen { break; }
+                        self.advance(); // past '('
+                        let tbl = if let Some(id) = self.parse_identifier_as_string_id(false) { id } else { break; };
+                        self.advance();
+                        if self.current.kind != TokenKind::Dot { break; }
+                        self.advance(); // past '.'
+                        let col = if let Some(id) = self.parse_identifier_as_string_id(false) { id } else { break; };
+                        self.advance();
+                        if self.current.kind == TokenKind::RightParen { self.advance(); }
+                        attributes.push(crate::parser::ast::ColumnAttribute::ForeignKey(tbl, col));
+                    }
+                    _ => break,
+                }
             }
 
             columns.push(crate::parser::ast::ColumnDef {
                 name: col_name,
                 ty: col_ty,
-                is_auto,
+                attributes,
             });
 
             if self.current.kind == TokenKind::Comma {
@@ -2433,11 +2619,44 @@ impl<'a> Parser<'a> {
         }
         
         if self.current.kind == TokenKind::RightBrace {
-            self.advance();
+            // Leave current on '}'
         }
 
         Some(Expr {
             kind: crate::parser::ast::ExprKind::TableLiteral { columns, rows },
+            span,
+        })
+    }
+
+    fn parse_database_literal(&mut self) -> Option<Expr> {
+        let span = self.current.span.clone();
+        if self.current.kind == TokenKind::Database {
+            self.advance();
+        }
+        if self.current.kind != TokenKind::LeftBrace { return None; }
+        self.advance(); // past '{'
+
+        let mut fields = Vec::new();
+        while self.current.kind != TokenKind::RightBrace && self.current.kind != TokenKind::EOF {
+             let field = if let Some(id) = self.parse_identifier_as_string_id(false) { id } else { break; };
+             self.advance();
+             if self.current.kind != TokenKind::Equal && self.current.kind != TokenKind::Colon { break; }
+             self.advance();
+             let val = self.parse_expression(Precedence::Lowest)?;
+             self.advance();
+             fields.push((field, val));
+
+             if self.current.kind == TokenKind::Comma {
+                 self.advance();
+             }
+        }
+        
+        if self.current.kind == TokenKind::RightBrace {
+            // Leave on '}'
+        }
+
+        Some(Expr {
+            kind: crate::parser::ast::ExprKind::DatabaseLiteral(fields),
             span,
         })
     }
@@ -2526,7 +2745,7 @@ impl<'a> Parser<'a> {
             self.advance();
         } else {
             while self.current.kind != TokenKind::RightBracket && self.current.kind != TokenKind::EOF {
-                let key_expr = self.parse_expression(Precedence::Lowest)?;
+                let key_expr = self.parse_expression(Precedence::Concatenation)?;
                 self.advance();
                 if self.current.kind != TokenKind::DoubleColon { return None; }
                 self.advance();
@@ -2545,7 +2764,7 @@ impl<'a> Parser<'a> {
         }
         
         if self.current.kind != TokenKind::RightBrace { return None; }
-        self.advance();
+        // Leave current on '}'
         
         Some(Expr {
             kind: crate::parser::ast::ExprKind::MapLiteral {
@@ -2555,5 +2774,57 @@ impl<'a> Parser<'a> {
             },
             span,
         })
+    }
+
+    fn parse_terminal_expression(&mut self) -> Option<crate::parser::ast::Expr> {
+        let span = self.current.span.clone();
+        self.advance(); // past '.'
+        self.advance(); // past 'terminal'
+        
+        if self.current.kind == TokenKind::Bang {
+            self.advance(); // past '!'
+        }
+
+        if let Some(cmd_id) = self.parse_identifier_as_string_id(false) {
+            let cmd_id_u = cmd_id;
+            let cmd_str = self.interner.lookup(cmd_id_u).to_string();
+            
+            if cmd_str == "write" {
+                self.advance(); // past 'write'
+                if let Some(expr) = self.parse_expression(Precedence::Lowest) {
+                    // stopping ON the last token of the expression.
+                    return Some(crate::parser::ast::Expr {
+                        kind: crate::parser::ast::ExprKind::TerminalCommand(cmd_id_u, vec![expr]),
+                        span,
+                    });
+                }
+            } else {
+                let mut args = Vec::new();
+                if self.peek.kind != TokenKind::Semicolon && self.peek.kind != TokenKind::EOF && self.peek.kind != TokenKind::RightParen && self.peek.kind != TokenKind::RightBracket {
+                    self.advance(); // past command name
+                    
+                    while self.current.kind != TokenKind::Semicolon && self.current.kind != TokenKind::EOF && self.current.kind != TokenKind::RightParen && self.current.kind != TokenKind::RightBracket {
+                        if let Some(expr) = self.parse_expression(Precedence::Lowest) {
+                            args.push(expr);
+                        }
+                        if self.peek.kind == TokenKind::Comma {
+                            self.advance(); // onto last token of arg
+                            self.advance(); // onto ','
+                            self.advance(); // onto next arg
+                        } else if self.peek.kind != TokenKind::Semicolon && self.peek.kind != TokenKind::EOF && self.peek.kind != TokenKind::RightParen && self.peek.kind != TokenKind::RightBracket {
+                            self.advance(); // past last token
+                        } else {
+                            break; // stays ON last token
+                        }
+                    }
+                }
+                
+                return Some(crate::parser::ast::Expr {
+                    kind: crate::parser::ast::ExprKind::TerminalCommand(cmd_id_u, args),
+                    span,
+                });
+            }
+        }
+        None
     }
 }

@@ -1,0 +1,6 @@
+s: csv = "apple,banana,cherry";
+array:s: fruits = csv.split(",");
+>! "Fruits size: " + fruits.size();
+for f in fruits do;
+    >! "Found: " + f;
+end;

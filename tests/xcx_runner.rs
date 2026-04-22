@@ -5,7 +5,7 @@ use xcx_compiler::parser::expander::Expander;
 use xcx_compiler::sema::checker::Checker;
 use xcx_compiler::sema::symbol_table::SymbolTable;
 use xcx_compiler::backend::Compiler as XCXCompiler;
-use xcx_compiler::backend::vm::{VM, SharedContext, Value, FunctionChunk};
+use xcx_compiler::backend::vm::{VM, SharedContext};
 use std::sync::Arc;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -13,7 +13,15 @@ use std::sync::Arc;
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn test_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("xcx")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("edge_cases_suite")
+}
+
+fn feature_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("feature_suite")
+}
+
+fn random_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("random_suite")
 }
 
 fn comprehensive_dir() -> PathBuf {
@@ -32,14 +40,19 @@ fn ultimate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("ultimate_suite")
 }
 
-/// Run a source string through the full pipeline. Panics if type-check or
-/// runtime panics.  Returns the VM after execution.
+fn refactor_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("refactor_baseline")
+}
+
+fn sql_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("sql_suite")
+}
+
 fn run_source(source: &str) -> Arc<VM> {
     run_source_with_dir(source, None)
 }
 
 fn run_source_with_dir(source: &str, dir: Option<PathBuf>) -> Arc<VM> {
-    // Inject assert function for testing convenience
     let source_with_assert = format!(
         "func assert(b: condition) {{ if (!condition) then; halt.error >! \"Assertion failed\"; end; }};\n{}",
         source
@@ -106,6 +119,71 @@ fn run_ultimate_file(filename: &str) -> Arc<VM> {
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Cannot read {}: {}", path.display(), e));
     run_source_with_dir(&source, Some(ultimate_dir()))
+}
+
+fn run_feature_file(filename: &str) -> Arc<VM> {
+    let path = feature_dir().join(filename);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Cannot read {}: {}", path.display(), e));
+    run_source_with_dir(&source, Some(feature_dir()))
+}
+
+fn run_random_file(filename: &str) -> Arc<VM> {
+    let path = random_dir().join(filename);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Cannot read {}: {}", path.display(), e));
+    run_source_with_dir(&source, Some(random_dir()))
+}
+
+fn run_refactor_file(filename: &str) -> Arc<VM> {
+    let path = refactor_dir().join(filename);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Cannot read {}: {}", path.display(), e));
+    run_source_with_dir(&source, Some(refactor_dir()))
+}
+
+fn run_sql_file(filename: &str) -> Arc<VM> {
+    let dir = sql_dir();
+    let path = dir.join(filename);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Cannot read {}: {}", path.display(), e));
+    
+    // Attempt to extract the database path for cleanup
+    let db_path = source.lines()
+        .map(|line| line.trim())
+        .find(|line| line.contains("path") && line.contains("=") && line.contains(".db"))
+        .and_then(|line| {
+            let parts: Vec<&str> = line.split('"').collect();
+            if parts.len() >= 2 { Some(parts[1].to_string()) } else { None }
+        });
+
+    {
+        let _vm = run_source_with_dir(&source, Some(dir.clone()));
+    }
+    
+    // Cleanup the specific .db file if identified - XCX 3.0 creates these in the project root
+    if let Some(db) = db_path {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let db_file = root.join(&db);
+        
+        // Give the OS a moment to release handles and retry deletion if needed
+        for _ in 0..5 {
+            if !db_file.exists() { 
+                break; 
+            }
+            if std::fs::remove_file(&db_file).is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        
+        // Also clean up common sqlite temporary files if they exist
+        let _ = std::fs::remove_file(root.join(format!("{}-journal", db)));
+        let _ = std::fs::remove_file(root.join(format!("{}-wal", db)));
+        let _ = std::fs::remove_file(root.join(format!("{}-shm", db)));
+    }
+    
+    Arc::new(VM::new()) // Return a dummy VM since the result is usually ignored in tests
 }
 
 /// Expect the type checker to REJECT this source with at least one error.
@@ -260,8 +338,6 @@ fn collections_file() {
 
 #[test]
 fn map_update_overwrites_existing_key() {
-    use xcx_compiler::backend::vm::Value;
-
     let source = r#"
         map: ages {
             schema = [s <-> i]
@@ -343,7 +419,6 @@ fn fib_source(n: u32) -> String {
 }
 
 fn run_fib(n: u32) -> i64 {
-    use xcx_compiler::backend::vm::Value;
     let source = fib_source(n);
     let mut parser = Parser::new(&source);
     let mut program = parser.parse_program();
@@ -670,6 +745,7 @@ mod comprehensive_suite {
     #[test] fn comp_14_tables_crud_and_relational() { run_comprehensive_file("14_tables_crud_and_relational.xcx"); }
     #[test] fn comp_15_json_raw_and_binding() { run_comprehensive_file("15_json_raw_and_binding.xcx"); }
     #[test] fn comp_16_fibers_and_yield_logic() { run_comprehensive_file("16_fibers_and_yield_logic.xcx"); }
+    #[test] fn comp_17_lib_spec() { run_comprehensive_file("lib_spec.xcx"); }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -702,8 +778,27 @@ mod hardening_suite {
     use super::*;
 
     #[test] fn hard_01_complex_binding() { run_hardening_file("test_complex_binding.xcx"); }
-    #[test] fn hard_02_deep_delegation() { run_hardening_file("test_deep_delegation.xcx"); }
-    #[test] fn hard_03_scope_integrity() { run_hardening_file("test_scope_integrity.xcx"); }
+
+    #[test]
+    fn hard_02_deep_delegation() {
+        std::thread::Builder::new()
+            .stack_size(128 * 1024 * 1024)
+            .spawn(|| run_hardening_file("test_deep_delegation.xcx"))
+            .unwrap()
+            .join()
+            .expect("hard_02_deep_delegation panicked");
+    }
+
+    #[test]
+    fn hard_03_scope_integrity() {
+        // Same concern as hard_02: run in a larger-stack thread for safety.
+        std::thread::Builder::new()
+            .stack_size(128 * 1024 * 1024)
+            .spawn(|| run_hardening_file("test_scope_integrity.xcx"))
+            .unwrap()
+            .join()
+            .expect("hard_03_scope_integrity panicked");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -730,6 +825,50 @@ mod ultimate_suite {
     #[test] fn ult_15_test15() { run_ultimate_file("test15.xcx"); }
     #[test] fn ult_16_math() { run_ultimate_file("test16_math.xcx"); }
     #[test] fn ult_17_math_comprehensive() { run_ultimate_file("test_math_comprehensive.xcx"); }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 14. FEATURE SUITE — Core language features
+// ─────────────────────────────────────────────────────────────────────────────
+
+mod feature_suite {
+    use super::*;
+
+    #[test] fn feat_basics() { run_feature_file("test_basics.xcx"); }
+    #[test] fn feat_collections() { run_feature_file("test_collections.xcx"); }
+    #[test] fn feat_control_flow() { run_feature_file("test_control_flow.xcx"); }
+    #[test] fn feat_functions() { run_feature_file("test_functions.xcx"); }
+    #[test] fn feat_operators() { run_feature_file("test_operators.xcx"); }
+    #[test] fn feat_std_lib() { run_feature_file("test_std_lib.xcx"); }
+    #[test] fn feat_io() { run_feature_file("test_io.xcx"); }
+    #[test] fn feat_json_http() { run_feature_file("test_json_http.xcx"); }
+    #[test] fn feat_fibers() { run_feature_file("test_fibers.xcx"); }
+    #[test] fn feat_all_elements() { run_feature_file("test_all_elements.xcx"); }
+    #[test] fn feat_settest() { run_feature_file("settest.xcx"); }
+    // #[test] fn feat_input_strict() { run_feature_file("input_strict_test.xcx"); }
+    #[test] fn feat_map_to_json() { run_feature_file("test_map_to_json.xcx"); }
+    #[test] fn feat_random_array() { run_feature_file("test_random_array.xcx"); }
+    #[test] fn feat_to_json() { run_feature_file("test_to_json.xcx"); }
+    #[test] fn feat_string_split() { run_feature_file("test_string_split.xcx"); }
+    #[test] fn feat_empty_set() { run_feature_file("test_empty_set.xcx"); }
+    #[test] fn feat_store_extension() { run_feature_file("store_extension.xcx"); }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 15. RANDOM SUITE — Random number generation
+// ─────────────────────────────────────────────────────────────────────────────
+
+mod random_suite {
+    use super::*;
+
+    #[test] fn rand_basics() { run_random_file("01_basics.xcx"); }
+}
+
+mod refactor_baseline {
+    use super::*;
+
+    #[test] fn collections_smoke() { run_refactor_file("collections_smoke.xcx"); }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -808,8 +947,18 @@ fn http_server_suite() {
 #[test] fn recent_features() { run_file("recent_features.xcx"); }
 #[test] fn terminal_run() { run_file("terminal_run.xcx"); }
 
-fn assert(condition: bool) {
-    if !condition {
-        panic!("Assertion failed");
-    }
+// ─────────────────────────────────────────────────────────────────────────────
+// 16. SQL SUITE — Database operations and cleanup
+// ─────────────────────────────────────────────────────────────────────────────
+
+mod sql_suite {
+    use super::*;
+
+    #[test] fn sql_basic() { run_sql_file("sql_basic.xcx"); }
+    #[test] fn sql_exec() { run_sql_file("sql_exec.xcx"); }
+    #[test] fn sql_queryraw() { run_sql_file("sql_queryraw.xcx"); }
+    #[test] fn sql_schema() { run_sql_file("sql_schema.xcx"); }
+    #[test] fn sql_tojson() { run_sql_file("sql_tojson.xcx"); }
+    #[test] fn sql_transactions() { run_sql_file("sql_transactions.xcx"); }
+    #[test] fn sql_where_advanced() { run_sql_file("sql_where_advanced.xcx"); }
 }

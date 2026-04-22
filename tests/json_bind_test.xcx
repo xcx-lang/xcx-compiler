@@ -1,0 +1,5 @@
+s: data = "{\"project\": {\"name\": \"nested_test\", \"version\": \"2.1\"}}";
+json: cfg = json.parse(data);
+s: proj_name = "";
+cfg.bind("project.name", proj_name);
+>! proj_name; --- Should print "nested_test"

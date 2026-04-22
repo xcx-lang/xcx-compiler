@@ -1,4 +1,5 @@
-# XCX 2.2 Collections
+//==language/collections.md==\\
+# XCX 3.0 Collections
 
 ## Arrays
 
@@ -30,6 +31,8 @@ nums.show();           --- prints contents to terminal
 | `.clear()`        | `() → b`     | `b`     | Removes all elements                                                |
 | `.sort()`         | `() → b`     | `b`     | Sorts ascending (in-place)                                          |
 | `.reverse()`      | `() → b`     | `b`     | Reverses order (in-place)                                           |
+| `.toStr()`        | `() → s`     | `s`     | Serializes array to a JSON-formatted string                         |
+| `.toJson()`       | `() → json`  | `json`  | Converts array to a native JSON structure                           |
 | `.show()`         | `() → b`     | `b`     | Prints contents to terminal                                         |
 
 ```xcx
@@ -107,17 +110,23 @@ setA ⊕ setB
 ### Random Selection and Iteration
 
 ```xcx
---- Random selection: only works on sets, NOT on arrays
-i: picked = random.choice from small;
+--- Random selection from a set:
+i: picked_set = random.choice from small;
 
---- Iteration
+--- Random selection from an array:
+array:i: nums {1, 2, 3, 4, 5};
+i: picked_arr = random.choice from nums;
+```
+
+Picking from an empty set or array returns `false`.
+
+### Iteration
+
+```xcx
 for p in small do;
     >! p;
 end;
 ```
-
-> [!IMPORTANT]
-> `random.choice from` only works with **set** types (`set:N`, `set:Z`, `set:Q`, `set:S`, `set:B`, `set:C`). It does **not** work with arrays.
 
 ---
 
@@ -148,7 +157,50 @@ map: scores {
 | `.keys()`        | `() → array:K`  | `array:K` | Returns array of keys                     |
 | `.values()`      | `() → array:V`  | `array:V` | Returns array of values                   |
 | `.clear()`       | `() → b`        | `b`       | Removes all pairs                         |
+| `.toStr()`       | `() → s`        | `s`       | Serializes map to a JSON-formatted string |
 | `.show()`        | `() → b`        | `b`       | Prints map contents to terminal           |
+| `.toJson()`      | `() → json`     | `json`    | Serializes map to a JSON object           |
+
+Map keys are converted to strings in the resulting JSON object.
+
+### Map Serialization (toJson)
+
+#### Signature
+`.toJson() → json`
+
+#### Description
+Serializes the map to a JSON object. All keys are converted to strings using their `.toString()` representation to satisfy JSON object key requirements.
+
+```xcx
+map: scores {
+    schema = [s <-> i]
+    data = [ "alice" :: 100, "bob" :: 85 ]
+};
+json: j = scores.toJson();
+```
+
+**JSON Output:**
+```json
+{
+    "alice": 100,
+    "bob": 85
+}
+```
+
+#### Behavior for Special Cases
+- **Empty Map**: Returns an empty object `{}`.
+- **Nested Structures**: If a map contains arrays, other maps, or tables, they are recursively serialized to their JSON equivalents.
+- **Key Conversion**: All map keys are converted to strings in the resulting JSON object using their standard `.toString()` representation.
+
+#### Type Mapping
+| XCX Type | JSON Type |
+|----------|-----------|
+| `i`      | `number`  |
+| `f`      | `number`  |
+| `s`      | `string`  |
+| `b`      | `boolean` |
+| `date`   | `string` (format `"YYYY-MM-DD HH:mm:ss"`) |
+| `json`   | (unchanged) |
 
 Always use `.contains()` before `.get()`:
 
@@ -179,6 +231,9 @@ table: logs {
 
 The `@auto` modifier on an `i` column creates an auto-incremented ID — it is skipped in `.insert()` and `.add()`.
 
+> [!NOTE]
+> Additional column attributes (`@pk`, `@unique`, `@optional`, `@default(v)`, `@fk(t.col)`) are used when connecting a table to a database. See [Database Documentation](database.md) for details.
+
 ### Row Access
 
 ```xcx
@@ -198,7 +253,45 @@ products[1].price   --- 1499.50
 | `.delete(i)`         | `(i) → b`               | `b`     | Removes row at index `i`                         |
 | `.where(pred)`       | `(expr) → table`        | `table` | Filters — returns a new table                    |
 | `.join(t, pred)`     | `(table, pred) → table` | `table` | Inner join with another table                    |
+| `.toJson()`          | `() → json`             | `json`  | Serializes all rows to a JSON array of objects   |
 | `.show()`            | `() → b`                | `b`     | Prints table in ASCII format                     |
+
+### Named Arguments for `.add()` and `.insert()`
+
+When a table has database column attributes, values can be passed by column name instead of position. Named arguments are **optional** — positional calls remain fully valid.
+
+```xcx
+table: users {
+    columns = [
+        id    :: i @auto @pk,
+        name  :: s @unique,
+        age   :: i,
+        phone :: s @optional,
+        role  :: s @default("user")
+    ]
+    rows = [EMPTY]
+};
+
+--- Positional (backward compatible)
+users.add("Alice", 25, "", "user");
+
+--- Named
+users.add(name = "Alice", age = 25, phone = "", role = "user");
+
+--- Mixed — positional args must come first
+users.add("Alice", age = 25, role = "admin");
+```
+
+**Namespace separation.** The left side of `=` is always the column name. The right side is an expression from the local scope. These are two independent namespaces — no conflict:
+
+```xcx
+s: name = "Alice";
+users.add(name = name, age = 25);
+--- left "name"  = column users.name
+--- right "name" = local variable
+```
+
+Rules: positional args must precede named; `@auto` columns can never be passed; omitting a required (non-`@optional`, non-`@default`) column is a compile error; duplicate column names in the same call are a compile error. See [Database Documentation](database.md) for the full specification.
 
 ### Filtering (where)
 
@@ -242,3 +335,45 @@ table: custom = tableA.join(tableB, (a, b) -> a.id == b.ref_id);
 ```
 
 When joined tables share a column name (other than the join key), the resulting column is prefixed with `{table_name}_`.
+
+### Serialization (toJson)
+
+#### Signature
+`.toJson() → json`
+
+#### Description
+Serializes all rows of a table to a JSON array, where each row becomes an object with keys corresponding to column names. `@auto` columns are included in the result.
+
+#### Format
+Always returns a JSON array (`[...]`). An empty table returns `[]`.
+
+```xcx
+table: products {
+    columns = [ id :: i @auto, name :: s, price :: f ]
+    rows = [ ("Laptop", 2999.99), ("Phone", 1499.50) ]
+};
+
+json: result = products.toJson();
+```
+
+**JSON Output:**
+```json
+[
+    {"id": 1, "name": "Laptop", "price": 2999.99},
+    {"id": 2, "name": "Phone",  "price": 1499.50}
+]
+```
+
+#### Type Mapping
+| XCX Type        | JSON Type                                 |
+|-----------------|-------------------------------------------|
+| `i` / `int`     | `number`                                  |
+| `f` / `float`   | `number`                                  |
+| `s` / `str`     | `string`                                  |
+| `b` / `bool`    | `boolean`                                 |
+| `date`          | `string` (format `"YYYY-MM-DD HH:mm:ss"`) |
+
+#### Behavior for Special Cases
+- **Empty Table**: Returns an empty array `[]`.
+- **Filtered Table**: Only rows currently in the table (after `.where()`) are serialized.
+- **Joined Table**: All columns from the joined result are included.

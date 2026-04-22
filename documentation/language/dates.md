@@ -1,4 +1,4 @@
-# XCX 2.2 Date and Time
+# XCX 3.0 Date and Time
 
 ## Creation
 

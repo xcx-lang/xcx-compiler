@@ -19,12 +19,54 @@ pub enum ForIterType {
     Fiber,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Argument {
+    Positional(Expr),
+    Named(StringId, Expr),
+}
+
+impl Argument {
+    pub fn expr(&self) -> &Expr {
+        match self {
+            Argument::Positional(e) => e,
+            Argument::Named(_, e) => e,
+        }
+    }
+
+    pub fn expr_mut(&mut self) -> &mut Expr {
+        match self {
+            Argument::Positional(e) => e,
+            Argument::Named(_, e) => e,
+        }
+    }
+}
+
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColumnAttribute {
+    Auto,
+    PrimaryKey,
+    Unique,
+    Optional,
+    Default(Expr),
+    ForeignKey(StringId, StringId), // Table, Column
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnDef {
     pub name: StringId,
     pub ty: Type,
-    pub is_auto: bool,
+    pub attributes: Vec<ColumnAttribute>,
+}
+
+impl ColumnDef {
+    pub fn is_auto(&self) -> bool {
+        self.attributes.iter().any(|a| matches!(a, ColumnAttribute::Auto))
+    }
+
+    pub fn is_pk(&self) -> bool {
+        self.attributes.iter().any(|a| matches!(a, ColumnAttribute::PrimaryKey))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,11 +80,59 @@ pub enum Type {
     Map(Box<Type>, Box<Type>),
     Date,
     Table(Vec<ColumnDef>),
+    Database,
+    DatabaseOperation(DatabaseOpKind, Vec<ColumnDef>),
     Json,
     Builtin(StringId),
     /// fiber:T (typed) or fiber (void, inner = None)
     Fiber(Option<Box<Type>>),
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DatabaseOpKind {
+    Remove,
+}
+
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::Int => write!(f, "int"),
+            Type::Float => write!(f, "float"),
+            Type::String => write!(f, "str"),
+            Type::Bool => write!(f, "bool"),
+            Type::Array(inner) => write!(f, "array:{}", inner),
+            Type::Set(st) => write!(f, "set:{}", st),
+            Type::Map(k, v) => write!(f, "map:{}<->{}", k, v),
+            Type::Date => write!(f, "date"),
+            Type::Table(_) => write!(f, "table"),
+            Type::Database => write!(f, "database"),
+            Type::DatabaseOperation(kind, _) => write!(f, "database_op:{:?}", kind),
+            Type::Json => write!(f, "json"),
+            Type::Builtin(_) => write!(f, "builtin"),
+            Type::Fiber(inner) => {
+                if let Some(t) = inner {
+                    write!(f, "fiber:{}", t)
+                } else {
+                    write!(f, "fiber")
+                }
+            }
+            Type::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+impl std::fmt::Display for SetType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SetType::N => write!(f, "N"),
+            SetType::Q => write!(f, "Q"),
+            SetType::Z => write!(f, "Z"),
+            SetType::S => write!(f, "S"),
+            SetType::B => write!(f, "B"),
+            SetType::C => write!(f, "C"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,12 +170,13 @@ pub enum ExprKind {
     },
     FunctionCall {
         name: StringId,
-        args: Vec<Expr>,
+        args: Vec<Argument>,
     },
     MethodCall {
         receiver: Box<Expr>,
         method: StringId,
-        args: Vec<Expr>,
+        args: Vec<Argument>,
+        wait_after: bool,
     },
     SetLiteral {
         set_type: SetType,
@@ -97,6 +188,16 @@ pub enum ExprKind {
     },
     RandomChoice {
         set: Box<Expr>,
+    },
+    RandomInt {
+        min: Box<Expr>,
+        max: Box<Expr>,
+        step: Option<Box<Expr>>,
+    },
+    RandomFloat {
+        min: Box<Expr>,
+        max: Box<Expr>,
+        step: Option<Box<Expr>>,
     },
     MapLiteral {
         key_type: Type,
@@ -111,6 +212,7 @@ pub enum ExprKind {
         columns: Vec<ColumnDef>,
         rows: Vec<Vec<Expr>>,
     },
+    DatabaseLiteral(Vec<(StringId, Expr)>),
     Index {
         receiver: Box<Expr>,
         index: Box<Expr>,
@@ -119,7 +221,7 @@ pub enum ExprKind {
         receiver: Box<Expr>,
         member: StringId,
     },
-    TerminalCommand(StringId, Option<Box<Expr>>),
+    TerminalCommand(StringId, Vec<Expr>),
     Lambda {
         params: Vec<(Type, StringId)>,
         return_type: Option<Type>,
@@ -136,6 +238,12 @@ pub enum ExprKind {
         body: Box<Expr>,
         headers: Option<Box<Expr>>,
     },
+    As {
+        expr: Box<Expr>,
+        name: StringId,
+    },
+    Yield(Box<Expr>),
+    Tag(StringId),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -160,7 +268,8 @@ pub enum StmtKind {
         value: Option<Expr>,
     },
     Print(Expr),
-    Input(StringId),
+    TerminalWrite(Expr),
+    Input(StringId, Type),
     ExprStmt(Expr),
     If {
         condition: Expr,
@@ -199,7 +308,7 @@ pub enum StmtKind {
     Return(Option<Expr>),
     FunctionCallStmt {
         name: StringId,
-        args: Vec<Expr>,
+        args: Vec<Argument>,
     },
     Include {
         path: StringId,
@@ -225,7 +334,7 @@ pub enum StmtKind {
         inner_type: Option<Type>,    
         name: StringId,              
         fiber_name: StringId,        
-        args: Vec<Expr>,
+        args: Vec<Argument>,
     },
     Yield(Expr),
     YieldFrom(Expr),

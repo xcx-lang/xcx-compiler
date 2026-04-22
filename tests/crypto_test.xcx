@@ -1,0 +1,16 @@
+func main() {
+    s: original = "Hello XCX!";
+    s: encoded = crypto.hash(original, "base64_encode");
+    s: decoded = crypto.hash(encoded, "base64_decode");
+    
+    >! "Original: " + original;
+    >! "Encoded:  " + encoded;
+    >! "Decoded:  " + decoded;
+    
+    if (original == decoded) then;
+        >! "Base64 Test: PASSED";
+    else;
+        >! "Base64 Test: FAILED";
+    end;
+};
+main();

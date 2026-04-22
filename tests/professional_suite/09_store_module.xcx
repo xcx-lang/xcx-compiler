@@ -25,4 +25,5 @@ if (read_appended HAS "\nAppended line" == false) then;
     halt.error >! "store.append() failed";
 end;
 
+store.delete(test_file);
 >! "Store module test passed";

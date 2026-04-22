@@ -1,0 +1,3 @@
+set:N: empty_set {};
+i: val = random.choice from empty_set;
+>! val;

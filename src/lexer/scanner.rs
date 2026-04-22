@@ -159,14 +159,45 @@ impl<'a> Scanner<'a> {
             b'@' => {
                 let start_col = col;
                 let mut name_bytes = Vec::new();
-                while self.peek().is_ascii_alphabetic() {
-                    name_bytes.push(self.advance());
+                let mut offset = 0;
+                while self.peek_at(offset).is_ascii_alphabetic() {
+                    name_bytes.push(self.peek_at(offset));
+                    offset += 1;
                 }
                 let name = std::str::from_utf8(&name_bytes).unwrap_or("");
                 match name {
-                    "step" => Token::new(TokenKind::AtStep, line, start_col, name.len() + 1),
-                    "auto" => Token::new(TokenKind::AtAuto, line, start_col, name.len() + 1),
-                    "wait" => Token::new(TokenKind::AtWait, line, start_col, name.len() + 1),
+                    "step" => {
+                        for _ in 0..name.len() { self.advance(); }
+                        Token::new(TokenKind::AtStep, line, start_col, name.len() + 1)
+                    }
+                    "auto" => {
+                        for _ in 0..name.len() { self.advance(); }
+                        Token::new(TokenKind::AtAuto, line, start_col, name.len() + 1)
+                    }
+                    "wait" => {
+                        for _ in 0..name.len() { self.advance(); }
+                        Token::new(TokenKind::AtWait, line, start_col, name.len() + 1)
+                    }
+                    "pk" => {
+                        for _ in 0..name.len() { self.advance(); }
+                        Token::new(TokenKind::AtPk, line, start_col, name.len() + 1)
+                    }
+                    "unique" => {
+                        for _ in 0..name.len() { self.advance(); }
+                        Token::new(TokenKind::AtUnique, line, start_col, name.len() + 1)
+                    }
+                    "optional" => {
+                        for _ in 0..name.len() { self.advance(); }
+                        Token::new(TokenKind::AtOptional, line, start_col, name.len() + 1)
+                    }
+                    "default" => {
+                        for _ in 0..name.len() { self.advance(); }
+                        Token::new(TokenKind::AtDefault, line, start_col, name.len() + 1)
+                    }
+                    "fk" => {
+                        for _ in 0..name.len() { self.advance(); }
+                        Token::new(TokenKind::AtFk, line, start_col, name.len() + 1)
+                    }
                     _ => Token::new(TokenKind::Unknown('@'), line, start_col, 1),
                 }
             }
@@ -188,6 +219,15 @@ impl<'a> Scanner<'a> {
             }
             b'\"' => {
                 self.string(line, col, interner)
+            }
+            b'#' => {
+                let start_char_pos = self.char_pos - 1;
+                while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
+                    self.advance();
+                }
+                let text = std::str::from_utf8(&self.source[self.pos - (self.char_pos - start_char_pos - 1) - 1..self.pos]).unwrap_or("");
+                let tag_text = &text[1..]; // skip #
+                Token::new(TokenKind::Tag(interner.intern(tag_text)), line, col, self.char_pos - start_char_pos)
             }
             b'\\' => Token::new(TokenKind::Difference, line, col, 1),
             _ => {
@@ -299,34 +339,14 @@ impl<'a> Scanner<'a> {
                 "const" => TokenKind::Const,
                 "i" | "int" => TokenKind::TypeI,
                 "f" | "float" => TokenKind::TypeF,
-                "s" | "string" => TokenKind::TypeS,
+                "s" | "string" | "str" => TokenKind::TypeS,
                 "b" | "bool" | "boolean" => TokenKind::TypeB,
                 "true" => TokenKind::True,
                 "false" => TokenKind::False,
                 "if" => TokenKind::If,
                 "then" => TokenKind::Then,
                 "elseif" | "elif" | "elf" => TokenKind::ElseIf,
-                "else" | "els" => {
-                    self.skip_whitespace_and_comments();
-                    let after_ws_pos = self.pos;
-                    let after_ws_char_pos = self.char_pos;
-                    let after_ws_line = self.line;
-                    let after_ws_col = self.col;
-                    let next_start = self.pos;
-                    while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
-                        self.advance();
-                    }
-                    let next_text = std::str::from_utf8(&self.source[next_start..self.pos]).unwrap_or("");
-                    if next_text == "if" {
-                        TokenKind::ElseIf
-                    } else {
-                        self.pos = after_ws_pos;
-                        self.char_pos = after_ws_char_pos;
-                        self.line = after_ws_line;
-                        self.col = after_ws_col;
-                        TokenKind::Else
-                    }
-                }
+                "else" | "els" => TokenKind::Else,
                 "end" => TokenKind::End,
                 "for" => TokenKind::For,
                 "in" => TokenKind::In,
@@ -354,6 +374,7 @@ impl<'a> Scanner<'a> {
                 "schema" => TokenKind::Schema,
                 "data" => TokenKind::Data,
                 "table" => TokenKind::Table,
+                "database" => TokenKind::Database,
                 "columns" => TokenKind::Columns,
                 "rows" => TokenKind::Rows,
                 "json" => TokenKind::Json,

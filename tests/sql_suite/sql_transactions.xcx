@@ -1,0 +1,75 @@
+database: db {
+    engine = "sqlite",
+    path   = "test_tx.db"
+};
+
+table: accounts {
+    columns = [
+        id      :: i @auto @pk,
+        owner   :: s @unique,
+        balance :: i
+    ]
+    rows = [EMPTY]
+};
+
+fiber run(-> b) {
+    yield db.sync(accounts);
+    yield db.truncate(accounts);
+
+    yield db.insert(accounts, "Alice", 1000);
+    yield db.insert(accounts, "Bob",   500);
+
+    db.begin();
+    yield db.exec("UPDATE [accounts] SET balance = balance + 200 WHERE owner = ?", ["Bob"]);
+    yield db.exec("UPDATE [accounts] SET balance = balance - 200 WHERE owner = ?", ["Alice"]);
+    db.commit();
+
+    table: alice_rows = yield db.fetch(accounts).where(owner == "Alice");
+    table: bob_rows   = yield db.fetch(accounts).where(owner == "Bob");
+    i: alice_bal = alice_rows[0].balance;
+    i: bob_bal   = bob_rows[0].balance;
+
+    if (alice_bal != 800) then;
+        >! "FAIL: Alice should have 800, has " + s(alice_bal);
+        return false;
+    end;
+    if (bob_bal != 700) then;
+        >! "FAIL: Bob should have 700, has " + s(bob_bal);
+        return false;
+    end;
+    >! "PASS: COMMIT - Alice=" + s(alice_bal) + " Bob=" + s(bob_bal);
+
+    db.begin();
+    yield db.exec("UPDATE [accounts] SET balance = 0 WHERE owner = ?", ["Alice"]);
+    yield db.exec("UPDATE [accounts] SET balance = 0 WHERE owner = ?", ["Bob"]);
+
+    b: should_rollback = true;
+    if (should_rollback) then;
+        db.rollback();
+    end;
+
+    table: alice_after_rows = yield db.fetch(accounts).where(owner == "Alice");
+    table: bob_after_rows   = yield db.fetch(accounts).where(owner == "Bob");
+    i: alice_after = alice_after_rows[0].balance;
+    i: bob_after   = bob_after_rows[0].balance;
+
+    if (alice_after != 800) then;
+        >! "FAIL: after ROLLBACK Alice should have 800, has " + s(alice_after);
+        return false;
+    end;
+    if (bob_after != 700) then;
+        >! "FAIL: after ROLLBACK Bob should have 700, has " + s(bob_after);
+        return false;
+    end;
+    >! "PASS: ROLLBACK - balances unchanged Alice=" + s(alice_after) + " Bob=" + s(bob_after);
+
+    return true;
+};
+
+fiber:b: f = run();
+b: ok = f.next();
+if (ok) then;
+    >! "=== sql_transactions: ALL TESTS PASSED ===";
+els;
+    >! "=== sql_transactions: ERROR ===";
+end;

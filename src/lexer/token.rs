@@ -13,6 +13,7 @@ pub enum TokenKind {
     Map,     // map
     Date,    // date
     Table,   // table
+    Database,// database
     Json,    // json
     Net,     // net
     Serve,   // serve
@@ -57,6 +58,11 @@ pub enum TokenKind {
     AtStep,  // @step
     AtAuto,  // @auto
     AtWait,  // @wait
+    AtPk,    // @pk
+    AtUnique, // @unique
+    AtOptional, // @optional
+    AtDefault, // @default
+    AtFk,     // @fk
     Halt,    // halt
     Alert,   // alert
     Error,   // error
@@ -115,8 +121,9 @@ pub enum TokenKind {
     DoubleColon, // ::
     Dot,        // .
     Bridge,     // <-> or <=>
-
+    
     // Special
+    Tag(StringId),
     EOF,
     Unknown(char),
 }

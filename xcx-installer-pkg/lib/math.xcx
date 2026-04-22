@@ -1,0 +1,820 @@
+---                       _   _     _ _ _      
+---                      | | | |   | (_) |     
+---  _ __ ___ __ _| |_| |__ | |_| |__   
+--- | '_ ` _ \ / _` | __| '_ \| | | '_ \ 
+--- | | | | | | (_| | |_| | | | | | |_) |
+--- |_| |_| |_|\__,_|\__|_| |_|_|_|_.__/ 
+---  +-------------------------------------------------+
+---  |  XCX 2.2 · Standard Math Library · v1.0.0      |
+---  |  Usage: include "math.xcx" as math;             |
+---  +-------------------------------------------------+
+---  |  [1] Constants        [6] Trigonometry          |
+---  |  [2] Basic - Integer  [7] Number Theory         |
+---  |  [3] Basic - Float    [8] Statistics            |
+---  |  [4] Powers & Roots   [9] Unit Converters       |
+---  |  [5] Logarithms & Exp                           |
+---  +-------------------------------------------------+
+
+--- ================================================================
+---   [1]
+---    ___                _              _       
+---   / __| ___  _ _  ___| |_ __ _ _ _ | |_ ___ 
+---  | (__ / _ \| ' \(_-<|  _/ _` | ' \|  _(_-< 
+---   \___|\___/|_||_/__/ \__\__,_|_||_|\__/__/ 
+--- ================================================================
+
+const f: PI      = 3.14159265358979;   --- ratio of circumference to diameter
+const f: E       = 2.71828182845905;   --- Euler's number
+const f: TAU     = 6.28318530717959;   --- 2 * PI
+const f: PHI     = 1.61803398874989;   --- golden ratio
+const f: SQRT2   = 1.41421356237310;   --- square root of 2
+const f: LN2     = 0.69314718055995;   --- natural log of 2
+const f: LN10    = 2.30258509299405;   --- natural log of 10
+const f: INF     = 999999999999999.0;  --- practical infinity approximation
+const i: INT_MAX = 2147483647;
+const i: INT_MIN = -2147483648;
+
+--- ================================================================
+---   [2]
+---   ___            _      ___     _   
+---  | _ ) __ _ ___ (_) __ |_ _|_ _| |_ 
+---  | _ \/ _` (_-< | |/ _| | || ' \  _|
+---  |___/\__,_/__/ |_|\__||___|_||_\__|
+--- ================================================================
+
+--- Returns the absolute value of an integer.
+func abs_i(i: x -> i) {
+    if (x < 0) then;
+        return -x;
+    end;
+    return x;
+};
+
+--- Returns the smaller of two integers.
+func min_i(i: a, i: b -> i) {
+    if (a < b) then; 
+        return a; 
+    end;
+    return b;
+};
+
+--- Returns the larger of two integers.
+func max_i(i: a, i: b -> i) {
+    if (a > b) then;
+        return a;
+    end;
+    return b;
+};
+
+--- Clamps val to the range [lo, hi].
+func clamp_i(i: val, i: lo, i: hi -> i) {
+    if (val < lo) then; 
+        return lo; 
+    end;
+    if (val > hi) then; 
+        return hi; 
+    end;
+    return val;
+};
+
+--- Returns 1, -1, or 0 depending on the sign of x.
+func sign_i(i: x -> i) {
+    if (x > 0) then; 
+        return 1;  
+    end;
+    if (x < 0) then; 
+        return -1; 
+    end;
+    return 0;
+};
+
+--- ================================================================
+---   [3]
+---   ___            _      ___ _          _   
+---  | _ ) __ _ ___ (_) __ | __| |___  __ _| |_ 
+---  | _ \/ _` (_-< | |/ _|| _|| / _ \/ _` |  _|
+---  |___/\__,_/__/ |_|\__||_| |_\___/\__,_|\__|
+--- ================================================================
+
+--- Returns the absolute value of a float.
+func abs_f(f: x -> f) {
+    if (x < 0.0) then;
+        return -x;
+    end;
+    return x;
+};
+
+--- Returns the smaller of two floats.
+func min_f(f: a, f: b -> f) {
+    if (a < b) then; 
+        return a; 
+    end;
+    return b;
+};
+
+--- Returns the larger of two floats.
+func max_f(f: a, f: b -> f) {
+    if (a > b) then; 
+        return a; 
+    end;
+    return b;
+};
+
+--- Clamps val to the range [lo, hi].
+func clamp_f(f: val, f: lo, f: hi -> f) {
+    if (val < lo) then; 
+        return lo; 
+    end;
+    if (val > hi) then; 
+        return hi; 
+    end;
+    return val;
+};
+
+--- Returns 1, -1, or 0 depending on the sign of x.
+func sign_f(f: x -> i) {
+    if (x > 0.0) then; 
+        return 1;  
+    end;
+    if (x < 0.0) then; 
+        return -1; 
+    end;
+    return 0;
+};
+
+--- Returns the largest integer less than or equal to x.
+func floor_f(f: x -> i) {
+    i: n = i(x);
+    if (x < 0.0 AND f(n) != x) then;
+        return n - 1;
+    end;
+    return n;
+};
+
+--- Returns the smallest integer greater than or equal to x.
+func ceil_f(f: x -> i) {
+    i: n = i(x);
+    if (x > 0.0 AND f(n) != x) then;
+        return n + 1;
+    end;
+    return n;
+};
+
+--- Rounds x to the nearest integer.
+func round_f(f: x -> i) {
+    return floor_f(x + 0.5);
+};
+
+--- Returns the fractional part of x.
+func frac(f: x -> f) {
+    return x - f(i(x));
+};
+
+--- Linear interpolation: a + (b - a) * t
+func lerp(f: a, f: b, f: t -> f) {
+    return a + (b - a) * t;
+};
+
+--- Linear interpolation with t clamped to [0.0, 1.0].
+func lerp_clamped(f: a, f: b, f: t -> f) {
+    f: tc = clamp_f(t, 0.0, 1.0);
+    return a + (b - a) * tc;
+};
+
+--- Returns true if |a - b| < epsilon.
+func nearly_equal(f: a, f: b, f: epsilon -> b) {
+    return abs_f(a - b) < epsilon;
+};
+
+--- ================================================================
+---   [4]
+---   ___                            
+---  | _ \_____ __ _____ _ _ ___     
+---  |  _/ _ \ V  V / -_) '_(_-<    
+---  |_| \___/\_/\_/\___|_| /__/     
+---    ___     ___              _    
+---   ( _ )   | _ \___ ___  | |_ ___
+---   / _ \   |   / _ \/ _ \ |  _(_-<
+---   \___/   |_|_\___/\___/  \__/__/
+--- ================================================================
+
+--- Raises an integer base to a non-negative integer exponent.
+--- Uses fast exponentiation by squaring.
+func pow_i(i: base, i: exp -> i) {
+    if (exp < 0) then;
+        halt.error >! "pow_i: negative exponent not allowed for integers";
+        return 0;
+    end;
+    if (exp == 0) then; return 1; end;
+    i: result = 1;
+    i: e = exp;
+    i: b = base;
+    while (e > 0) do;
+        if (e % 2 == 1) then;
+            result = result * b;
+        end;
+        b = b * b;
+        e = e / 2;
+    end;
+    return result;
+};
+
+--- Raises a float base to an integer exponent (positive or negative).
+func pow_f(f: base, i: exp -> f) {
+    if (exp == 0) then; return 1.0; end;
+    b: neg = (exp < 0);
+    i: e = abs_i(exp);
+    f: result = 1.0;
+    f: b = base;
+    while (e > 0) do;
+        if (e % 2 == 1) then;
+            result = result * b;
+        end;
+        b = b * b;
+        e = e / 2;
+    end;
+    if (neg) then;
+        if (result == 0.0) then;
+            halt.error >! "pow_f: division by zero (1 / 0)";
+            return 0.0;
+        end;
+        return 1.0 / result;
+    end;
+    return result;
+};
+
+--- Returns the square root of x using Newton-Raphson iteration.
+func sqrt_f(f: x -> f) {
+    if (x < 0.0) then;
+        halt.error >! "sqrt_f: square root of negative number";
+        return -1.0;
+    end;
+    if (x == 0.0) then; return 0.0; end;
+    f: guess = x / 2.0;
+    i: iter = 0;
+    while (iter < 50) do;
+        f: next = (guess + x / guess) / 2.0;
+        if (abs_f(next - guess) < 0.000000001) then;
+            return next;
+        end;
+        guess = next;
+        iter = iter + 1;
+    end;
+    return guess;
+};
+
+--- Returns the cube root of x (works for negative numbers too).
+func cbrt_f(f: x -> f) {
+    if (x == 0.0) then; return 0.0; end;
+    f: s = 1.0;
+    if (x < 0.0) then; s = -1.0; end;
+    f: ax = abs_f(x);
+    f: g = ax / 3.0;
+    i: iter = 0;
+    while (iter < 50) do;
+        f: g3 = g * g * g;
+        f: next = g - (g3 - ax) / (3.0 * g * g);
+        if (abs_f(next - g) < 0.000000001) then;
+            return s * next;
+        end;
+        g = next;
+        iter = iter + 1;
+    end;
+    return s * g;
+};
+
+--- Returns the hypotenuse of a right triangle: sqrt(a^2 + b^2).
+func hypot(f: a, f: b -> f) {
+    return sqrt_f(a * a + b * b);
+};
+
+--- ================================================================
+---   [5]
+---   _                       _ _   _                    
+---  | |   ___  __ _  __ _ _ (_) |_| |_  _ __  ___      
+---  | |__/ _ \/ _` |/ _` | '_| |  _| ' \| '  \(_-<     
+---  |____\___/\__, |\__,_|_| |_|\__|_||_|_|_|_/__/     
+---             |___/                                    
+---    ___                              _   _      _     
+---   | __|_ ___ __  ___ _ _  ___ _ _ | |_(_)__ _| |    
+---   | _|\ \ / '_ \/ _ \ ' \/ -_) ' \|  _| / _` | |   
+---   |___/_\_\ .__/\___/_||_\___|_||_|\__|_\__,_|_|   
+---            |_|                                      
+--- ================================================================
+
+--- Returns e raised to the power x, computed via Taylor series.
+func exp_f(f: x -> f) {
+    f: result = 1.0;
+    f: term   = 1.0;
+    i: n      = 1;
+    while (n < 100) do;
+        term = term * x / f(n);
+        result = result + term;
+        if (abs_f(term) < 0.0000000000001) then;
+            return result;
+        end;
+        n = n + 1;
+    end;
+    return result;
+};
+
+--- Returns the natural logarithm of x.
+func ln_f(f: x -> f) {
+    if (x <= 0.0) then;
+        halt.error >! "ln_f: logarithm of non-positive number";
+        return 0.0;
+    end;
+    i: k = 0;
+    f: v = x;
+    while (v >= E) do;
+        v = v / E;
+        k = k + 1;
+    end;
+    while (v < 1.0) do;
+        v = v * E;
+        k = k - 1;
+    end;
+    f: t      = v - 1.0;
+    f: result = 0.0;
+    f: term   = t;
+    i: n      = 1;
+    while (n < 200) do;
+        if (n % 2 == 1) then;
+            result = result + term / f(n);
+        else;
+            result = result - term / f(n);
+        end;
+        term = term * t;
+        if (abs_f(term) < 0.0000000000001) then;
+            return f(k) + result;
+        end;
+        n = n + 1;
+    end;
+    return f(k) + result;
+};
+
+--- Returns the base-2 logarithm of x.
+func log2_f(f: x -> f) {
+    return ln_f(x) / LN2;
+};
+
+--- Returns the base-10 logarithm of x.
+func log10_f(f: x -> f) {
+    return ln_f(x) / LN10;
+};
+
+--- Returns the logarithm of x in a given base.
+func log_base(f: x, f: base -> f) {
+    if (base <= 0.0 OR base == 1.0) then;
+        halt.error >! "log_base: invalid logarithm base";
+        return 0.0;
+    end;
+    return ln_f(x) / ln_f(base);
+};
+
+--- ================================================================
+---   [6]
+---   _____     _                                     _           
+---  |_   _| _ (_) __ _  ___  _ _   ___  _ __   ___| |_ _ _ _  _ 
+---    | || '_| |/ _` |/ _ \| ' \ / _ \| '  \ / -_)  _| '_| || |
+---    |_||_| |_|\__, |\___/|_||_|\___/|_|_|_|\___|\__|_|  \_, |
+---              |___/                                      |__/ 
+--- ================================================================
+
+--- Converts degrees to radians.
+func deg_to_rad(f: deg -> f) {
+    return deg * PI / 180.0;
+};
+
+--- Converts radians to degrees.
+func rad_to_deg(f: rad -> f) {
+    return rad * 180.0 / PI;
+};
+
+--- Returns the sine of x (radians) via Taylor series.
+func sin_f(f: x -> f) {
+    f: v = x;
+    while (v > PI)  do; v = v - TAU; end;
+    while (v < -PI) do; v = v + TAU; end;
+    f: result = v;
+    f: term   = v;
+    i: n      = 1;
+    while (n < 20) do;
+        term = -term * v * v / f(2 * n) / f(2 * n + 1);
+        result = result + term;
+        n = n + 1;
+    end;
+    return result;
+};
+
+--- Returns the cosine of x (radians).
+func cos_f(f: x -> f) {
+    return sin_f(x + PI / 2.0);
+};
+
+--- Returns the tangent of x (radians).
+func tan_f(f: x -> f) {
+    f: c = cos_f(x);
+    if (abs_f(c) < 0.000000001) then;
+        halt.error >! "tan_f: tangent undefined (cosine is zero)";
+        return 0.0;
+    end;
+    return sin_f(x) / c;
+};
+
+--- Returns the arctangent of x in radians.
+func atan_f(f: x -> f) {
+    if (x > 1.0)  then; return PI / 2.0  - atan_f(1.0 / x); end;
+    if (x < -1.0) then; return -PI / 2.0 - atan_f(1.0 / x); end;
+    f: x2     = x * x;
+    f: result = x;
+    f: term   = x;
+    i: n      = 1;
+    while (n < 50) do;
+        term = -term * x2;
+        result = result + term / f(2 * n + 1);
+        n = n + 1;
+    end;
+    return result;
+};
+
+--- Returns the angle (radians) of the point (x, y) from the positive x-axis.
+func atan2_f(f: y, f: x -> f) {
+    if (x > 0.0)               then; return atan_f(y / x);          end;
+    if (x < 0.0 AND y >= 0.0)  then; return atan_f(y / x) + PI;     end;
+    if (x < 0.0 AND y < 0.0)   then; return atan_f(y / x) - PI;     end;
+    if (x == 0.0 AND y > 0.0)  then; return PI / 2.0;               end;
+    if (x == 0.0 AND y < 0.0)  then; return -PI / 2.0;              end;
+    halt.error >! "atan2_f: both arguments are zero";
+    return 0.0;
+};
+
+--- Returns the arcsine of x in radians. x must be in [-1, 1].
+func asin_f(f: x -> f) {
+    if (x < -1.0 OR x > 1.0) then;
+        halt.error >! "asin_f: argument out of range [-1, 1]";
+        return 0.0;
+    end;
+    return atan_f(x / sqrt_f(1.0 - x * x));
+};
+
+--- Returns the arccosine of x in radians. x must be in [-1, 1].
+func acos_f(f: x -> f) {
+    if (x < -1.0 OR x > 1.0) then;
+        halt.error >! "acos_f: argument out of range [-1, 1]";
+        return 0.0;
+    end;
+    return PI / 2.0 - asin_f(x);
+};
+
+--- Hyperbolic sine.
+func sinh_f(f: x -> f) {
+    return (exp_f(x) - exp_f(-x)) / 2.0;
+};
+
+--- Hyperbolic cosine.
+func cosh_f(f: x -> f) {
+    return (exp_f(x) + exp_f(-x)) / 2.0;
+};
+
+--- Hyperbolic tangent.
+func tanh_f(f: x -> f) {
+    f: e2 = exp_f(2.0 * x);
+    return (e2 - 1.0) / (e2 + 1.0);
+};
+
+--- ================================================================
+---   [7]
+---   _  _            _               _____ _                      
+---  | \| |_  _ _ __ | |__  ___ _ _  |_   _| |_  ___ ___ _ _ _  _ 
+---  | .` | || | '  \| '_ \/ -_) '_|   | | | ' \/ -_) _ \ '_| || |
+---  |_|\_|\_,_|_|_|_|_.__/\___|_|     |_| |_||_\___\___/_|  \_, |
+---                                                            |__/ 
+--- ================================================================
+
+--- Returns the greatest common divisor of a and b (Euclidean algorithm).
+func gcd(i: a, i: b -> i) {
+    i: x = abs_i(a);
+    i: y = abs_i(b);
+    while (y != 0) do;
+        i: t = y;
+        y = x % y;
+        x = t;
+    end;
+    return x;
+};
+
+--- Returns the least common multiple of a and b.
+func lcm(i: a, i: b -> i) {
+    if (a == 0 OR b == 0) then; return 0; end;
+    return abs_i(a / gcd(a, b) * b);
+};
+
+--- Returns true if n is a prime number.
+func is_prime(i: n -> b) {
+    if (n < 2)       then; return false; end;
+    if (n == 2)      then; return true;  end;
+    if (n % 2 == 0)  then; return false; end;
+    i: k = 3;
+    while (k * k <= n) do;
+        if (n % k == 0) then; return false; end;
+        k = k + 2;
+    end;
+    return true;
+};
+
+--- Returns n! (iterative, avoids recursion depth limits).
+func factorial(i: n -> i) {
+    if (n < 0) then;
+        halt.error >! "factorial: negative argument";
+        return -1;
+    end;
+    if (n == 0 OR n == 1) then; return 1; end;
+    i: result = 1;
+    i: k = 2;
+    while (k <= n) do;
+        result = result * k;
+        k = k + 1;
+    end;
+    return result;
+};
+
+--- Returns the n-th Fibonacci number (iterative).
+func fibonacci(i: n -> i) {
+    if (n < 0) then;
+        halt.error >! "fibonacci: negative argument";
+        return -1;
+    end;
+    if (n == 0) then; return 0; end;
+    if (n == 1) then; return 1; end;
+    i: a = 0;
+    i: b = 1;
+    i: k = 2;
+    while (k <= n) do;
+        i: tmp = a + b;
+        a = b;
+        b = tmp;
+        k = k + 1;
+    end;
+    return b;
+};
+
+--- Returns C(n, k) — binomial coefficient "n choose k".
+func combinations(i: n, i: k -> i) {
+    if (k < 0 OR k > n) then; return 0; end;
+    if (k == 0 OR k == n) then; return 1; end;
+    i: kk = k;
+    if (n - k < k) then; kk = n - k; end;
+    i: result = 1;
+    i: j = 0;
+    while (j < kk) do;
+        result = result * (n - j) / (j + 1);
+        j = j + 1;
+    end;
+    return result;
+};
+
+--- Returns P(n, k) — number of k-permutations of n elements.
+func permutations(i: n, i: k -> i) {
+    if (k < 0 OR k > n) then; return 0; end;
+    i: result = 1;
+    i: j = 0;
+    while (j < k) do;
+        result = result * (n - j);
+        j = j + 1;
+    end;
+    return result;
+};
+
+--- Returns true if n is even.
+func is_even(i: n -> b) {
+    return n % 2 == 0;
+};
+
+--- Returns true if n is odd.
+func is_odd(i: n -> b) {
+    return n % 2 != 0;
+};
+
+--- Returns true if n is divisible by d.
+func is_divisible(i: n, i: d -> b) {
+    if (d == 0) then;
+        halt.error >! "is_divisible: divisor is zero";
+        return false;
+    end;
+    return n % d == 0;
+};
+
+--- Returns the sum of all decimal digits of n.
+func digits_sum(i: n -> i) {
+    i: v = abs_i(n);
+    i: s = 0;
+    while (v > 0) do;
+        s = s + v % 10;
+        v = v / 10;
+    end;
+    return s;
+};
+
+--- Returns the number of decimal digits in n.
+func count_digits(i: n -> i) {
+    if (n == 0) then; return 1; end;
+    i: v = abs_i(n);
+    i: c = 0;
+    while (v > 0) do;
+        v = v / 10;
+        c = c + 1;
+    end;
+    return c;
+};
+
+--- Returns the integer with its digits reversed (e.g. 123 -> 321).
+func reverse_int(i: n -> i) {
+    b: neg = (n < 0);
+    i: v = abs_i(n);
+    i: r = 0;
+    while (v > 0) do;
+        r = r * 10 + v % 10;
+        v = v / 10;
+    end;
+    if (neg) then; return -r; end;
+    return r;
+};
+
+--- Returns true if n reads the same forwards and backwards.
+func is_palindrome_int(i: n -> b) {
+    if (n < 0) then; return false; end;
+    return n == reverse_int(n);
+};
+
+--- ================================================================
+---   [8]
+---   ___  _        _   _     _   _          
+---  / __|| |_ __ _| |_(_)___| |_(_)__ ___  
+---  \__ \|  _/ _` |  _| (_-<  _| / _(_-<  
+---  |___/ \__\__,_|\__|_/__/\__|_\__/__/   
+--- ================================================================
+
+--- Returns the sum of all elements in an float array.
+func sum_arr(array:f: arr -> f) {
+    f: s = 0.0;
+    i: k = 0;
+    i: sz = arr.size();
+    while (k < sz) do;
+        f: val = arr.get(k);
+        s = s + val;
+        k = k + 1;
+    end;
+    return s;
+};
+
+--- Returns the sum of all elements in an integer array.
+func sum_arr_i(array:i: arr -> i) {
+    i: s = 0;
+    i: k = 0;
+    while (k < arr.size()) do;
+        s = s + arr.get(k);
+        k = k + 1;
+    end;
+    return s;
+};
+
+--- Returns the arithmetic mean of the array.
+func mean(array:f: arr -> f) {
+    i: n = arr.size();
+    if (n == 0) then;
+        halt.error >! "mean: empty array";
+        return 0.0;
+    end;
+    f: s = sum_arr(arr);
+    f: result = s / f(n);
+    return result;
+};
+
+--- Returns the population variance of the array.
+func variance(array:f: arr -> f) {
+    i: n = arr.size();
+    if (n < 2) then;
+        halt.error >! "variance: at least 2 elements required";
+        return 0.0;
+    end;
+    f: m   = mean(arr);
+    f: acc = 0.0;
+    i: k   = 0;
+    while (k < n) do;
+        f: diff = arr.get(k) - m;
+        acc = acc + diff * diff;
+        k = k + 1;
+    end;
+    return acc / f(n);
+};
+
+--- Returns the population standard deviation of the array.
+func std_dev(array:f: arr -> f) {
+    return sqrt_f(variance(arr));
+};
+
+--- Returns the minimum value in the array.
+func min_arr(array:f: arr -> f) {
+    i: n = arr.size();
+    if (n == 0) then;
+        halt.error >! "min_arr: empty array";
+        return 0.0;
+    end;
+    f: m = arr.get(0);
+    i: k = 1;
+    while (k < n) do;
+        f: v = arr.get(k);
+        if (v < m) then; m = v; end;
+        k = k + 1;
+    end;
+    return m;
+};
+
+--- Returns the maximum value in the array.
+func max_arr(array:f: arr -> f) {
+    i: n = arr.size();
+    if (n == 0) then;
+        halt.error >! "max_arr: empty array";
+        return 0.0;
+    end;
+    f: m = arr.get(0);
+    i: k = 1;
+    while (k < n) do;
+        f: v = arr.get(k);
+        if (v > m) then; m = v; end;
+        k = k + 1;
+    end;
+    return m;
+};
+
+--- Returns max - min of the array.
+func range_arr(array:f: arr -> f) {
+    return max_arr(arr) - min_arr(arr);
+};
+
+--- Returns the median of the array (sorts a copy in-place).
+func median(array:f: arr -> f) {
+    i: n = arr.size();
+    if (n == 0) then;
+        halt.error >! "median: empty array";
+        return 0.0;
+    end;
+    arr.sort();
+    if (n % 2 == 1) then;
+        return arr.get(n / 2);
+    end;
+    return (arr.get(n / 2 - 1) + arr.get(n / 2)) / 2.0;
+};
+
+--- Returns the dot product of two equal-length float arrays.
+func dot_product(array:f: a, array:f: b -> f) {
+    if (a.size() != b.size()) then;
+        halt.error >! "dot_product: arrays must have equal length";
+        return 0.0;
+    end;
+    f: s = 0.0;
+    i: k = 0;
+    while (k < a.size()) do;
+        s = s + a.get(k) * b.get(k);
+        k = k + 1;
+    end;
+    return s;
+};
+
+--- Returns the Euclidean norm (magnitude) of a vector.
+func norm_vec(array:f: v -> f) {
+    return sqrt_f(dot_product(v, v));
+};
+
+--- ================================================================
+---   [9]
+---    ___                        _                 
+---   / __|___ _ ___ _____ _ _  | |_ ___ _ _ ___  
+---  | (__/ _ \ ' \ V / -_) '_| |  _/ -_) '_(_-<  
+---   \___\___/_||_\_/\___|_|    \__\___|_| /__/  
+--- ================================================================
+
+--- Distance
+func km_to_miles(f: km -> f) { return km  * 0.621371; };
+func miles_to_km(f: mi -> f) { return mi  * 1.609344; };
+func m_to_ft(f: m  -> f)     { return m   * 3.280840; };
+func ft_to_m(f: ft -> f)     { return ft  * 0.304800; };
+
+--- Weight
+func kg_to_lbs(f: kg  -> f) { return kg  * 2.204623; };
+func lbs_to_kg(f: lbs -> f) { return lbs * 0.453592; };
+
+--- Temperature
+func celsius_to_f(f: c    -> f) { return c * 9.0 / 5.0 + 32.0;      };
+func fahrenheit_to_c(f: fahr -> f) { return (fahr - 32.0) * 5.0 / 9.0; };
+func celsius_to_k(f: c    -> f) { return c + 273.15;                  };
+func kelvin_to_c(f: k     -> f) { return k - 273.15;                  };
+
+--- Volume
+func liters_to_gal(f: l -> f) { return l * 0.264172; };
+func gal_to_liters(f: g -> f) { return g * 3.785412; };
+
+--- ================================================================
+---   END OF math.xcx
+--- ================================================================

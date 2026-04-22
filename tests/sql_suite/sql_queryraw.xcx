@@ -1,0 +1,75 @@
+database: db {
+    engine = "sqlite",
+    path   = "test_queryraw.db"
+};
+
+table: products {
+    columns = [
+        id    :: i @auto @pk,
+        name  :: s,
+        price :: i
+    ]
+    rows = [EMPTY]
+};
+
+fiber run(-> b) {
+    yield db.sync(products);
+    yield db.truncate(products);
+
+    yield db.insert(products, "Laptop", 3000);
+    yield db.insert(products, "Phone",  1500);
+    yield db.insert(products, "Tablet", 2000);
+
+    json: cnt_result = yield db.queryRaw("SELECT COUNT(*) as n FROM [products]");
+    if (cnt_result.size() == 0) then;
+        >! "FAIL: queryRaw returned empty result";
+        return false;
+    end;
+    >! "PASS: queryRaw returned result";
+
+    json: first_row = cnt_result.get(0);
+    i: total;
+    first_row.bind("n", total);
+    if (total != 3) then;
+        >! "FAIL: COUNT should be 3, is " + s(total);
+        return false;
+    end;
+    >! "PASS: COUNT(*) = " + s(total);
+
+    json: sum_result = yield db.queryRaw("SELECT SUM(price) as s FROM [products]");
+    json: sum_row = sum_result.get(0);
+    i: total_price;
+    sum_row.bind("s", total_price);
+    if (total_price != 6500) then;
+        >! "FAIL: SUM(price) should be 6500, is " + s(total_price);
+        return false;
+    end;
+    >! "PASS: SUM(price) = " + s(total_price);
+
+    json: max_result = yield db.queryRaw("SELECT MAX(price) as m FROM [products]");
+    json: max_row = max_result.get(0);
+    i: max_price;
+    max_row.bind("m", max_price);
+    if (max_price != 3000) then;
+        >! "FAIL: MAX(price) should be 3000, is " + s(max_price);
+        return false;
+    end;
+    >! "PASS: MAX(price) = " + s(max_price);
+
+    json: filtered = yield db.queryRaw("SELECT * FROM [products] WHERE price > ?", [1800]);
+    if (filtered.size() != 2) then;
+        >! "FAIL: queryRaw with params should return 2, got " + s(filtered.size());
+        return false;
+    end;
+    >! "PASS: queryRaw with params returned " + s(filtered.size()) + " rows";
+
+    return true;
+};
+
+fiber:b: f = run();
+b: ok = f.next();
+if (ok) then;
+    >! "=== sql_queryraw: ALL TESTS PASSED ===";
+els;
+    >! "=== sql_queryraw: ERROR ===";
+end;

@@ -5,6 +5,9 @@ use std::collections::HashMap;
 pub struct StringId(pub u32);
 
 #[derive(Debug, Clone)]
+/// Global string interner for the XCX compiler.
+/// Transforms strings into unique `StringId` values to optimize comparison
+/// and reduce memory usage across the AST and bytecode.
 pub struct Interner {
     map: HashMap<String, StringId>,
     strings: Vec<String>,

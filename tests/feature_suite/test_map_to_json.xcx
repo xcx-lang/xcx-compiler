@@ -1,0 +1,22 @@
+--- Test Map to JSON serialization - FINAL VERIFICATION
+
+map: scores {
+    schema = [s <-> i]
+    data = [ "alice" :: 100, "bob" :: 85 ]
+};
+json: j_scores = scores.toJson();
+>! j_scores;
+
+map: id_to_name {
+    schema = [i <-> s]
+    data = [ 1 :: "Laptop", 2 :: "Phone" ]
+};
+json: j_id_to_name = id_to_name.toJson();
+>! j_id_to_name;
+
+map: empty_map {
+    schema = [s <-> i]
+    data = [EMPTY]
+};
+json: j_empty = empty_map.toJson();
+>! j_empty;

@@ -1,6 +1,0 @@
---- tests/xcx/terminal_run.xcx
-
-b: res = .terminal !run "tests/xcx/terminal_run_helper.xcx";
-assert(res == true);
-
->! "Terminal run test passed!";

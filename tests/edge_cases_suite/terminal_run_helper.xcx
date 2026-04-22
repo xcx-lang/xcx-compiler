@@ -1,0 +1,2 @@
+--- tests/edge_cases_suite/terminal_run_helper.xcx
+>! "Hello from helper!";

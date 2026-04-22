@@ -1,0 +1,38 @@
+table: products {
+    columns = [ id :: i @auto, name :: s, price :: f ]
+    rows = [ ("Laptop", 2999.99), ("Phone", 1499.50) ]
+};
+
+json: result = products.toJson();
+>! result;
+
+--- Test empty table
+table: empty {
+    columns = [ id :: i @auto, msg :: s ]
+    rows = [EMPTY]
+};
+json: res_empty = empty.toJson();
+>! res_empty;
+
+--- Test joined table
+table: users {
+    columns = [ id :: i @auto, username :: s ]
+    rows = [ ("alice"), ("bob") ]
+};
+
+table: orders {
+    columns = [ order_id :: i @auto, user_id :: i, amount :: f ]
+    rows = [ (1, 50.0), (1, 120.5), (2, 75.0) ]
+};
+
+table: joined = users.join(orders, "id", "user_id");
+json: res_joined = joined.toJson();
+>! res_joined;
+
+--- Test table with dates
+table: events {
+    columns = [ id :: i @auto, name :: s, event_date :: date ]
+    rows = [ ("Conference", date("2024-05-15")), ("Meeting", date("2024-06-20")) ]
+};
+json: res_date = events.toJson();
+>! res_date;

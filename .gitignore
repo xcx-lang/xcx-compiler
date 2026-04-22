@@ -26,3 +26,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.log
+
+# AI/Agent metadata
+.agents/
+.gemini/

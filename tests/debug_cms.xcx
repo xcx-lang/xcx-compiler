@@ -1,0 +1,59 @@
+
+table: users {
+    columns = [ 
+        id :: i @auto, 
+        username :: s, 
+        password_hash :: s, 
+        role :: s
+    ]
+    rows = [EMPTY]
+};
+
+users.insert("admin", "hash1", "admin");
+users.insert("editor", "hash2", "editor");
+
+--- Mimic handle_get_users
+func test_get_users() {
+    i: total = users.count();
+    >! "Total users: " + total;
+    json: resp <<< {"users": [], "total": 0} >>>;
+    for i in 0 to (total - 1) do;
+        >! "Processing user " + i;
+        json: u <<< {"id": 0, "username": "", "role": ""} >>>;
+        u.set("id",       users.get(i).id);
+        u.set("username", users.get(i).username);
+        u.set("role",     users.get(i).role);
+        resp.set("users[" + i + "]", u);
+    end;
+    resp.set("total", total);
+    >! "Result: " + resp.to_str();
+};
+
+test_get_users();
+
+table: articles {
+    columns = [
+        id :: i @auto,
+        title :: s,
+        content :: s,
+        image_url :: s,
+        author_id :: i,
+        is_published :: b
+    ]
+    rows = [EMPTY]
+};
+
+articles.insert("Title 1", "Content 1", "img1", 1, true);
+articles.insert("Title 2", "Content 2", "img2", 1, false);
+
+--- Mimic handle_get_my_articles
+func test_get_my_articles(i: uid) {
+    >! "Testing get_my_articles for uid: " + uid;
+    table: my_arts = articles.where(author_id == uid);
+    >! "Found articles: " + my_arts.count();
+    json: resp <<< {"articles": []} >>>;
+    resp.set("articles", my_arts.toJson());
+    >! "Result: " + resp.to_str();
+};
+
+test_get_my_articles(1);

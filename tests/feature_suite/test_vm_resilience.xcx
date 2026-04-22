@@ -1,0 +1,53 @@
+--- VM Resilience Test: .first() and Boolean Methods
+--- This test verifies that calling .first() on empty collections
+--- and .exists() on booleans does not halt the VM.
+
+func run_test() {
+    >! "--- Testing Table.first() on empty table ---";
+    table: t_empty {
+        columns = [ id :: i, name :: s ]
+        rows = [EMPTY]
+    };
+    
+    val1 = t_empty.first();
+    if (val1 == false) then;
+        >! "PASS: t_empty.first() returned false";
+    else;
+        >! "FAIL: t_empty.first() did not return false";
+        halt.error;
+    end;
+
+    >! "--- Testing JSON.first() on empty array ---";
+    json: j_empty = <<< [] >>>;
+    val2 = j_empty.first();
+    if (val2 == false) then;
+        >! "PASS: j_empty.first() returned false";
+    else;
+        >! "FAIL: j_empty.first() did not return false";
+        halt.error;
+    end;
+
+    >! "--- Testing Boolean.exists() ---";
+    b: my_bool = false;
+    val3 = my_bool.exists("any");
+    if (val3 == false) then;
+        >! "PASS: my_bool.exists() returned false";
+    else;
+        >! "FAIL: my_bool.exists() did not return false";
+        halt.error;
+    end;
+
+    >! "--- Testing cascading fail (auth simulation) ---";
+    --- This mimics the CMS middleware crash
+    json: u_info = t_empty.first(); --- returns false
+    if (!u_info.exists("ok")) then;
+        >! "PASS: cascading exists check worked";
+    else;
+        >! "FAIL: cascading exists check failed";
+        halt.error;
+    end;
+
+    >! "All resilience tests PASSED!";
+};
+
+run_test();

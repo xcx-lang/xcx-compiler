@@ -1,0 +1,20 @@
+i: r1 = random.int(1, 10000000000);
+>! "Int (1-10, default step 1): " + r1;
+
+i: r2 = random.int(1, 10 @step 2);
+>! "Int (1-10, step 2): " + r2;
+
+f: r3 = random.float(0.0, 5.0);
+>! "Float (0.0-5.0, default step 0.5): " + r3;
+
+f: r4 = random.float(0.0, 1.0 @step 0.1);
+>! "Float (0.0-1.0, step 0.1): " + r4;
+
+set:N: pool {10, 20, 30};
+i: r5 = random.choice from pool;
+>! "Choice from {10, 20, 30}: " + r5;
+
+>! random.int(1, 10);
+>! random.int(1, 10 @step 2);
+>! random.float(0.0, 5.0);
+>! random.float(0.0, 1.0 @step 0.1);

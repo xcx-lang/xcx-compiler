@@ -5,7 +5,7 @@ pub mod repl;
 mod tests;
 
 use crate::parser::ast::{Stmt, Expr};
-use crate::backend::vm::{OpCode, Value, FunctionChunk, MethodKind, SetData};
+use crate::backend::vm::{OpCode, Value, FunctionChunk, MethodKind, SetData, TypeTag};
 use crate::lexer::token::TokenKind;
 use crate::sema::interner::{Interner, StringId};
 use std::collections::HashMap;
@@ -17,12 +17,12 @@ pub struct Compiler {
     pub func_indices: HashMap<StringId, usize>,
     pub functions: Vec<FunctionChunk>,
     pub constants: Vec<Value>,
-    pub string_constants: HashMap<String, usize>,
+    pub string_constants: HashMap<Vec<u8>, usize>,
 }
 
 pub struct CompileContext<'a> {
     pub constants: &'a mut Vec<Value>,
-    pub string_constants: &'a mut HashMap<String, usize>,
+    pub string_constants: &'a mut HashMap<Vec<u8>, usize>,
     pub functions: &'a mut Vec<FunctionChunk>,
     pub func_indices: &'a HashMap<StringId, usize>,
     pub globals: &'a HashMap<StringId, usize>,
@@ -37,7 +37,7 @@ impl<'a> CompileContext<'a> {
                 return idx as u32;
             }
             let idx = self.constants.len();
-            self.string_constants.insert(s.to_string(), idx);
+            self.string_constants.insert((*s).clone(), idx);
             self.constants.push(val);
             return idx as u32;
         }
@@ -128,11 +128,11 @@ impl FunctionCompiler {
                 self.collect_captures(right, parent_locals, out);
             }
             ExprKind::FunctionCall { args, .. } => {
-                for arg in args { self.collect_captures(arg, parent_locals, out); }
+                for arg in args { self.collect_captures(arg.expr(), parent_locals, out); }
             }
             ExprKind::MethodCall { receiver, args, .. } => {
                 self.collect_captures(receiver, parent_locals, out);
-                for arg in args { self.collect_captures(arg, parent_locals, out); }
+                for arg in args { self.collect_captures(arg.expr(), parent_locals, out); }
             }
             ExprKind::ArrayLiteral { elements } => {
                 for e in elements { self.collect_captures(e, parent_locals, out); }
@@ -212,10 +212,10 @@ impl FunctionCompiler {
             "replace" => Some(MethodKind::Replace),
             "slice" => Some(MethodKind::Slice),
             "split" => Some(MethodKind::Split),
-            "startsWith" | "starts_with" => Some(MethodKind::StartsWith),
-            "endsWith" | "ends_with" => Some(MethodKind::EndsWith),
-            "toInt" | "to_int" => Some(MethodKind::ToInt),
-            "toFloat" | "to_float" => Some(MethodKind::ToFloat),
+            "startsWith" => Some(MethodKind::StartsWith),
+            "endsWith" => Some(MethodKind::EndsWith),
+            "toInt" => Some(MethodKind::ToInt),
+            "toFloat" => Some(MethodKind::ToFloat),
             "set" => Some(MethodKind::Set),
             "keys" => Some(MethodKind::Keys),
             "values" => Some(MethodKind::Values),
@@ -230,11 +230,26 @@ impl FunctionCompiler {
             "exists" => Some(MethodKind::Exists),
             "append" => Some(MethodKind::Append),
             "inject" => Some(MethodKind::Inject),
-            "to_str" | "to_string" | "toString" => Some(MethodKind::ToStr),
+            "toStr" | "toString" | "to_str" => Some(MethodKind::ToStr),
             "next" => Some(MethodKind::Next),
             "run" => Some(MethodKind::Run),
+            "toJson" => Some(MethodKind::ToJson),
             "isDone" => Some(MethodKind::IsDone),
             "close" => Some(MethodKind::Close),
+            "sync" => Some(MethodKind::Sync),
+            "fetch" => Some(MethodKind::Fetch),
+            "query" => Some(MethodKind::Query),
+            "queryRaw" => Some(MethodKind::QueryRaw),
+            "drop" => Some(MethodKind::Drop),
+            "begin" => Some(MethodKind::Begin),
+            "commit" => Some(MethodKind::Commit),
+            "rollback" => Some(MethodKind::Rollback),
+            "save" => Some(MethodKind::Save),
+            "truncate" => Some(MethodKind::Truncate),
+            "exec" => Some(MethodKind::Exec),
+            "isOpen" => Some(MethodKind::IsOpen),
+            "key" => Some(MethodKind::Key),
+            "ready" => Some(MethodKind::Ready),
             _ => None,
         }
     }
@@ -243,7 +258,7 @@ impl FunctionCompiler {
         match ty {
             crate::parser::ast::Type::Int => Value::from_i64(0),
             crate::parser::ast::Type::Float => Value::from_f64(0.0),
-            crate::parser::ast::Type::String => Value::from_string("".to_string().into()),
+            crate::parser::ast::Type::String => Value::from_string(Arc::new(Vec::new())),
             crate::parser::ast::Type::Bool => Value::from_bool(false),
             crate::parser::ast::Type::Array(_) => Value::from_array(Arc::new(RwLock::new(Vec::new()))),
             crate::parser::ast::Type::Set(_) => Value::from_set(Arc::new(RwLock::new(SetData { elements: std::collections::BTreeSet::new(), cache: None }))),
@@ -253,16 +268,19 @@ impl FunctionCompiler {
                 let vm_cols = cols.iter().map(|c| crate::backend::vm::VMColumn {
                     name: ctx.interner.lookup(c.name).to_string(),
                     ty: c.ty.clone(),
-                    is_auto: c.is_auto,
+                    is_auto: c.is_auto(),
+                    is_pk: c.is_pk(),
                 }).collect();
                 Value::from_table(Arc::new(RwLock::new(
-                    crate::backend::vm::TableData { columns: vm_cols, rows: Vec::new() }
+                    crate::backend::vm::TableData { table_name: String::new(), columns: vm_cols, rows: Vec::new(), sql_binding: None, sql_where: None, pending_op: None }
                 )))
             }
             crate::parser::ast::Type::Json => Value::from_json(Arc::new(RwLock::new(serde_json::Value::Null))),
-            crate::parser::ast::Type::Builtin(_) => Value::from_string("builtin".to_string().into()),
+            crate::parser::ast::Type::Builtin(_) => Value::from_string(Arc::new(b"builtin".to_vec())),
             crate::parser::ast::Type::Unknown => Value::from_i64(0),
             crate::parser::ast::Type::Fiber(_) => Value::from_bool(false),
+            crate::parser::ast::Type::Database => Value::from_bool(false),
+            crate::parser::ast::Type::DatabaseOperation(_, _) => Value::from_bool(false),
         }
     }
 
@@ -275,12 +293,25 @@ impl FunctionCompiler {
         r
     }
 
+    fn sync_max_locals(&mut self) {
+        if self.next_local > self.max_locals_used {
+            self.max_locals_used = self.next_local;
+        }
+    }
+
     pub fn pop_reg(&mut self) {
         self.next_local -= 1;
     }
 
     pub fn compile_expr(&mut self, expr: &Expr, ctx: &mut CompileContext) -> u8 {
         match &expr.kind {
+            crate::parser::ast::ExprKind::Tag(id) => {
+                let s = ctx.interner.lookup(*id).to_string();
+                let i = ctx.add_constant(Value::from_string(Arc::new(s.into_bytes())));
+                let dst = self.push_reg();
+                self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
+                dst
+            }
             crate::parser::ast::ExprKind::IntLiteral(v) => {
                 let i = ctx.add_constant(Value::from_i64(*v));
                 let dst = self.push_reg();
@@ -295,7 +326,7 @@ impl FunctionCompiler {
             }
             crate::parser::ast::ExprKind::StringLiteral(id) => {
                 let s = ctx.interner.lookup(*id).to_string();
-                let i = ctx.add_constant(Value::from_string(Arc::new(s)));
+                let i = ctx.add_constant(Value::from_string(Arc::new(s.into_bytes())));
                 let dst = self.push_reg();
                 self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
                 dst
@@ -316,10 +347,8 @@ impl FunctionCompiler {
                     self.emit(OpCode::GetVar { dst, idx: idx as u32 }, &expr.span);
                     dst
                 } else if self.is_table_lambda {
-                    // In a table lambda, unknown identifiers are treated as row members.
-                    // The row object is always the first parameter (R0).
                     let dst = self.push_reg();
-                    let mi = ctx.add_constant(Value::from_string(Arc::new(ctx.interner.lookup(*id).to_string())));
+                    let mi = ctx.add_constant(Value::from_string(Arc::new(ctx.interner.lookup(*id).to_string().into_bytes())));
                     self.emit(OpCode::MethodCallCustom { dst, method_name_idx: mi, base: 0, arg_count: 0 }, &expr.span);
                     dst
                 } else if let Some(&fid) = ctx.func_indices.get(id) {
@@ -328,10 +357,9 @@ impl FunctionCompiler {
                     self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
                     dst
                 } else {
-                    // Default fallback: return identifier name as a string constant
                     let dst = self.push_reg();
                     let name = ctx.interner.lookup(*id).to_string();
-                    let i = ctx.add_constant(Value::from_string(Arc::new(name)));
+                    let i = ctx.add_constant(Value::from_string(Arc::new(name.into_bytes())));
                     self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
                     dst
                 }
@@ -339,62 +367,77 @@ impl FunctionCompiler {
             crate::parser::ast::ExprKind::FunctionCall { name, args } => {
                 let n = ctx.interner.lookup(*name);
                 if n == "json.parse" && args.len() == 1 {
-                    let src = self.compile_expr(&args[0], ctx);
+                    let src = self.compile_expr(args[0].expr(), ctx);
                     let dst = src; // Reuse register
                     self.emit(OpCode::JsonParse { dst, src }, &expr.span);
                     dst
                 } else if n == "terminal.input" {
                     let dst = self.push_reg();
-                    self.emit(OpCode::Input { dst }, &expr.span);
+                    self.emit(OpCode::Input { dst, ty: TypeTag::Unknown }, &expr.span);
                     dst
                 } else if n == "i" && args.len() == 1 {
-                    let src = self.compile_expr(&args[0], ctx);
+                    let src = self.compile_expr(args[0].expr(), ctx);
                     let dst = src;
                     self.emit(OpCode::CastInt { dst, src }, &expr.span);
                     dst
                 } else if n == "f" && args.len() == 1 {
-                    let src = self.compile_expr(&args[0], ctx);
+                    let src = self.compile_expr(args[0].expr(), ctx);
                     let dst = src;
                     self.emit(OpCode::CastFloat { dst, src }, &expr.span);
                     dst
                 } else if n == "s" && args.len() == 1 {
-                    let src = self.compile_expr(&args[0], ctx);
+                    let src = self.compile_expr(args[0].expr(), ctx);
                     let dst = src;
                     self.emit(OpCode::CastString { dst, src }, &expr.span);
                     dst
                 } else if n == "b" && args.len() == 1 {
-                    let src = self.compile_expr(&args[0], ctx);
+                    let src = self.compile_expr(args[0].expr(), ctx);
                     let dst = src;
                     self.emit(OpCode::CastBool { dst, src }, &expr.span);
                     dst
                 } else {
                     let base = self.next_local as u8;
+                    let mut arg_count = 0u8;
                     for arg in args {
-                        self.compile_expr(arg, ctx);
+                        let arg_reg = base + arg_count;
+                        self.next_local = arg_reg as usize;
+                        let src = self.compile_expr(arg.expr(), ctx);
+                        if src != arg_reg {
+                            self.emit(OpCode::Move { dst: arg_reg, src }, &expr.span);
+                        }
+                        arg_count += 1;
                     }
+
                     let dst = base;
                     if let Some(&fid) = ctx.func_indices.get(name) {
                         if ctx.functions[fid].is_fiber {
-                            self.emit(OpCode::FiberCreate { dst, func_idx: fid as u32, base, arg_count: args.len() as u8 }, &expr.span);
+                            self.emit(OpCode::FiberCreate { dst, func_idx: fid as u32, base, arg_count }, &expr.span);
                         } else {
-                            self.emit(OpCode::Call { dst, func_idx: fid as u32, base, arg_count: args.len() as u8 }, &expr.span);
+                            self.emit(OpCode::Call { dst, func_idx: fid as u32, base, arg_count }, &expr.span);
                         }
                     } else {
                         // Dynamic call? Not supported yet in 2.2, but we can emit a placeholder
                         self.emit(OpCode::Halt, &expr.span);
                     }
                     self.next_local = (base + 1) as usize;
+                    self.sync_max_locals();
                     dst
                 }
             }
             crate::parser::ast::ExprKind::ArrayLiteral { elements } => {
                 let base = self.next_local as u8;
-                for e in elements {
-                    self.compile_expr(e, ctx);
+                for (i, e) in elements.iter().enumerate() {
+                    let dst = base + i as u8;
+                    self.next_local = dst as usize;
+                    let src = self.compile_expr(e, ctx);
+                    if src != dst { self.emit(OpCode::Move { dst, src }, &expr.span); }
+                    self.next_local = (dst + 1) as usize;
+                    self.sync_max_locals();
                 }
                 let dst = base;
                 self.emit(OpCode::ArrayInit { dst, base, count: elements.len() as u32 }, &expr.span);
                 self.next_local = (base + 1) as usize;
+                self.sync_max_locals();
                 dst
             }
             crate::parser::ast::ExprKind::SetLiteral { elements, range, .. } => {
@@ -416,34 +459,97 @@ impl FunctionCompiler {
                     };
                     let dst = start;
                     self.emit(OpCode::SetRange { dst, start, end, step, has_step: has_step_reg }, &expr.span);
-                    self.next_local = (dst + 1) as usize;
+                    self.next_local = (dst + 1) as usize; self.sync_max_locals();
+                    self.sync_max_locals();
                     dst
                 } else {
                     let base = self.next_local as u8;
-                    for e in elements {
-                        self.compile_expr(e, ctx);
+                    for (i, e) in elements.iter().enumerate() {
+                        let dst = base + i as u8;
+                        self.next_local = dst as usize;
+                        let src = self.compile_expr(e, ctx);
+                        if src != dst { self.emit(OpCode::Move { dst, src }, &expr.span); }
+                        self.next_local = (dst + 1) as usize;
+                        self.sync_max_locals();
                     }
                     let dst = base;
                     self.emit(OpCode::SetInit { dst, base, count: elements.len() as u32 }, &expr.span);
                     self.next_local = (base + 1) as usize;
+                    self.sync_max_locals();
                     dst
                 }
             }
             crate::parser::ast::ExprKind::MapLiteral { elements, .. } => {
                 let base = self.next_local as u8;
-                for (k, v) in elements {
-                    self.compile_expr(k, ctx);
-                    self.compile_expr(v, ctx);
+                for (i, (k, v)) in elements.iter().enumerate() {
+                    let k_dst = base + (i as u8 * 2);
+                    self.next_local = k_dst as usize;
+                    let k_src = self.compile_expr(k, ctx);
+                    if k_src != k_dst { self.emit(OpCode::Move { dst: k_dst, src: k_src }, &expr.span); }
+                    self.next_local = (k_dst + 1) as usize;
+                    self.sync_max_locals();
+
+                    let v_dst = k_dst + 1;
+                    self.next_local = v_dst as usize;
+                    let v_src = self.compile_expr(v, ctx);
+                    if v_src != v_dst { self.emit(OpCode::Move { dst: v_dst, src: v_src }, &expr.span); }
+                    self.next_local = (v_dst + 1) as usize;
+                    self.sync_max_locals();
                 }
                 let dst = base;
                 self.emit(OpCode::MapInit { dst, base, count: elements.len() as u32 }, &expr.span);
                 self.next_local = (base + 1) as usize;
+                self.sync_max_locals();
                 dst
             }
             crate::parser::ast::ExprKind::RandomChoice { set } => {
                 let src = self.compile_expr(set, ctx);
                 let dst = src;
                 self.emit(OpCode::RandomChoice { dst, src }, &expr.span);
+                dst
+            }
+            crate::parser::ast::ExprKind::RandomInt { min, max, step } => {
+                let min_reg = self.compile_expr(min, ctx);
+                let max_reg = self.compile_expr(max, ctx);
+                let (step_reg, has_step_reg) = if let Some(s) = step {
+                    let s_reg = self.compile_expr(s, ctx);
+                    let h_idx = ctx.add_constant(Value::from_bool(true));
+                    let h_reg = self.push_reg();
+                    self.emit(OpCode::LoadConst { dst: h_reg, idx: h_idx }, &expr.span);
+                    (s_reg, h_reg)
+                } else {
+                    let dummy = self.push_reg();
+                    let f_idx = ctx.add_constant(Value::from_bool(false));
+                    let f_reg = self.push_reg();
+                    self.emit(OpCode::LoadConst { dst: f_reg, idx: f_idx }, &expr.span);
+                    (dummy, f_reg)
+                };
+                let dst = min_reg;
+                self.emit(OpCode::RandomInt { dst, min: min_reg, max: max_reg, step: step_reg, has_step: has_step_reg }, &expr.span);
+                self.next_local = (dst + 1) as usize; self.sync_max_locals();
+                self.sync_max_locals();
+                dst
+            }
+            crate::parser::ast::ExprKind::RandomFloat { min, max, step } => {
+                let min_reg = self.compile_expr(min, ctx);
+                let max_reg = self.compile_expr(max, ctx);
+                let (step_reg, has_step_reg) = if let Some(s) = step {
+                    let s_reg = self.compile_expr(s, ctx);
+                    let h_idx = ctx.add_constant(Value::from_bool(true));
+                    let h_reg = self.push_reg();
+                    self.emit(OpCode::LoadConst { dst: h_reg, idx: h_idx }, &expr.span);
+                    (s_reg, h_reg)
+                } else {
+                    let dummy = self.push_reg();
+                    let f_idx = ctx.add_constant(Value::from_bool(false));
+                    let f_reg = self.push_reg();
+                    self.emit(OpCode::LoadConst { dst: f_reg, idx: f_idx }, &expr.span);
+                    (dummy, f_reg)
+                };
+                let dst = min_reg;
+                self.emit(OpCode::RandomFloat { dst, min: min_reg, max: max_reg, step: step_reg, has_step: has_step_reg }, &expr.span);
+                self.next_local = (dst + 1) as usize; self.sync_max_locals();
+                self.sync_max_locals();
                 dst
             }
             crate::parser::ast::ExprKind::DateLiteral { date_string, format } => {
@@ -465,7 +571,7 @@ impl FunctionCompiler {
                 self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
                 dst
             }
-            crate::parser::ast::ExprKind::MethodCall { receiver, method, args } => {
+            crate::parser::ast::ExprKind::MethodCall { receiver, method, args, wait_after } => {
                 let method_name = ctx.interner.lookup(*method).to_string();
                 let mut is_store = false;
                 let mut is_date = false;
@@ -479,18 +585,55 @@ impl FunctionCompiler {
                     if rname == "json" { is_json = true; }
                     if rname == "env" { is_env = true; }
                     if rname == "crypto" { is_crypto = true; }
+                    if rname == "input" {
+                        if method_name == "key" {
+                            let wait = *wait_after || (if let Some(arg) = args.get(0) {
+                                if let crate::parser::ast::ExprKind::Tag(t) = &arg.expr().kind {
+                                    ctx.interner.lookup(*t) == "wait"
+                                } else { false }
+                            } else { false });
+                            let dst = self.push_reg();
+                            if wait {
+                                self.emit(OpCode::InputKeyWait { dst }, &expr.span);
+                            } else {
+                                self.emit(OpCode::InputKey { dst }, &expr.span);
+                            }
+                            return dst;
+                        }
+                        if method_name == "ready" {
+                            let dst = self.push_reg();
+                            self.emit(OpCode::InputReady { dst }, &expr.span);
+                            return dst;
+                        }
+                    }
                 }
 
                 if is_store {
                     let base = self.next_local as u8;
-                    for arg in args { self.compile_expr(arg, ctx); }
-                    let dst = base; // arbitrary, many store ops don't return meaningful value or return null
+                    let mut arg_count = 0u8;
+                    for arg in args {
+                        let arg_reg = base + arg_count;
+                        self.next_local = arg_reg as usize;
+                        let src = self.compile_expr(arg.expr(), ctx);
+                        if src != arg_reg {
+                            self.emit(OpCode::Move { dst: arg_reg, src }, &expr.span);
+                        }
+                        arg_count += 1;
+                    }
+                    let dst = base;
                     match method_name.as_str() {
                         "write"  => self.emit(OpCode::StoreWrite { base }, &expr.span),
                         "read"   => self.emit(OpCode::StoreRead { dst, base }, &expr.span),
                         "append" => self.emit(OpCode::StoreAppend { base }, &expr.span),
                         "exists" => self.emit(OpCode::StoreExists { dst, base }, &expr.span),
                         "delete" => self.emit(OpCode::StoreDelete { base }, &expr.span),
+                        "list"   => self.emit(OpCode::StoreList { dst, base }, &expr.span),
+                        "isDir"  => self.emit(OpCode::StoreIsDir { dst, base }, &expr.span),
+                        "size"   => self.emit(OpCode::StoreSize { dst, base }, &expr.span),
+                        "mkdir"  => self.emit(OpCode::StoreMkdir { base }, &expr.span),
+                        "glob"   => self.emit(OpCode::StoreGlob { dst, base }, &expr.span),
+                        "zip"    => self.emit(OpCode::StoreZip { dst, base }, &expr.span),
+                        "unzip"  => self.emit(OpCode::StoreUnzip { dst, base }, &expr.span),
                         _ => {}
                     }
                     self.next_local = (base + 1) as usize;
@@ -502,7 +645,7 @@ impl FunctionCompiler {
                     return dst;
                 }
                 if is_json && method_name == "parse" {
-                    let src = self.compile_expr(&args[0], ctx);
+                    let src = self.compile_expr(args[0].expr(), ctx);
                     let dst = src;
                     self.emit(OpCode::JsonParse { dst, src }, &expr.span);
                     return dst;
@@ -510,10 +653,10 @@ impl FunctionCompiler {
                 if is_env {
                     let dst = self.push_reg();
                     if method_name == "get" {
-                        if let Some(arg) = args.first() {
-                            let src = self.compile_expr(arg, ctx);
+                        if let Some(arg_node) = args.first() {
+                            let src = self.compile_expr(arg_node.expr(), ctx);
                             self.emit(OpCode::EnvGet { dst, src }, &expr.span);
-                            self.pop_reg(); // pop src if it was temp
+                            self.pop_reg();
                         }
                     } else if method_name == "args" {
                         self.emit(OpCode::EnvArgs { dst }, &expr.span);
@@ -522,7 +665,16 @@ impl FunctionCompiler {
                 }
                 if is_crypto {
                     let base = self.next_local as u8;
-                    for arg in args { self.compile_expr(arg, ctx); }
+                    let mut arg_count = 0u8;
+                    for arg in args {
+                        let arg_reg = base + arg_count;
+                        self.next_local = arg_reg as usize;
+                        let src = self.compile_expr(arg.expr(), ctx);
+                        if src != arg_reg {
+                            self.emit(OpCode::Move { dst: arg_reg, src }, &expr.span);
+                        }
+                        arg_count += 1;
+                    }
                     let dst = base;
                     match method_name.as_str() {
                         "hash"   => self.emit(OpCode::CryptoHash { dst, pass_src: base, alg_src: base + 1 }, &expr.span),
@@ -534,17 +686,17 @@ impl FunctionCompiler {
                     return dst;
                 }
 
-                // Normal Method Call
-                let base = self.next_local as u8;
-                self.compile_expr(receiver, ctx);
+                let r_src = self.compile_expr(receiver, ctx);
+                let base = self.push_reg();
+                if r_src != base { self.emit(OpCode::Move { dst: base, src: r_src }, &expr.span); }
 
                 if method_name == "where" && args.len() == 1 {
-                    if !matches!(args[0].kind, crate::parser::ast::ExprKind::Lambda { .. }) {
+                    if !matches!(args[0].expr().kind, crate::parser::ast::ExprKind::Lambda { .. }) {
                         // Special: Table.where() with shorthand predicate
                         // Wrap the expression in a synthetic lambda: row -> <expression>
                         let flat_locals = self.convert_to_flat_locals();
                         let mut captures = Vec::new();
-                        self.collect_captures(&args[0], &flat_locals, &mut captures);
+                        self.collect_captures(args[0].expr(), &flat_locals, &mut captures);
 
                         let mut sub = FunctionCompiler::new(false, Some(flat_locals));
                         sub.is_table_lambda = true;
@@ -556,29 +708,40 @@ impl FunctionCompiler {
                         
                         sub.next_local = 1 + captures.len(); // R0=row, R1..RK=captures
                         
-                        let res = sub.compile_expr(&args[0], ctx);
-                        sub.emit(OpCode::Return { src: res }, &args[0].span);
+                        let res = sub.compile_expr(args[0].expr(), ctx);
+                        sub.emit(OpCode::Return { src: res }, &args[0].expr().span);
                         
                         let captures_to_pass = sub.captures.clone();
                         
                         let fid = ctx.functions.len();
+                        let has_loops = sub.bytecode.iter().enumerate().any(|(i, op)| {
+                            match op {
+                                OpCode::Jump { target } => (*target as usize) < i,
+                                OpCode::JumpIfFalse { target, .. } => (*target as usize) < i,
+                                OpCode::JumpIfTrue { target, .. } => (*target as usize) < i,
+                                _ => false,
+                            }
+                        });
                         ctx.functions.push(FunctionChunk {
                             bytecode: Arc::new(sub.bytecode),
                             spans: Arc::new(sub.spans),
                             is_fiber: false,
                             max_locals: sub.max_locals_used.max(sub.next_local),
+                            has_loops,
+                            jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
+        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                         });
                         
                         let f_val = Value::from_function(fid as u32);
                         let f_idx = ctx.add_constant(f_val);
                         let f_reg = self.push_reg();
-                        self.emit(OpCode::LoadConst { dst: f_reg, idx: f_idx }, &args[0].span);
+                        self.emit(OpCode::LoadConst { dst: f_reg, idx: f_idx }, &args[0].expr().span);
                         
                         // Push captured variables as additional arguments
                         for &cap_id in &captures_to_pass {
                             if let Some(slot) = self.lookup_local(&cap_id) {
                                 let r = self.push_reg();
-                                self.emit(OpCode::Move { dst: r, src: slot as u8 }, &args[0].span);
+                                self.emit(OpCode::Move { dst: r, src: slot as u8 }, &args[0].expr().span);
                             } else {
                                 // This should not happen since we just identified them as parent locals
                                 self.push_reg(); 
@@ -588,25 +751,86 @@ impl FunctionCompiler {
                         let dst = base;
                         self.emit(OpCode::MethodCall { dst, kind: MethodKind::Where, base, arg_count: (1 + captures_to_pass.len()) as u8 }, &expr.span);
                         self.next_local = (base + 1) as usize;
+                        self.sync_max_locals();
                         return dst;
                     }
                 }
 
-                for arg in args { self.compile_expr(arg, ctx); }
-                let dst = base;
-                if let Some(kind) = self.map_method_kind(&method_name) {
-                    self.emit(OpCode::MethodCall { dst, kind, base, arg_count: args.len() as u8 }, &expr.span);
-                } else {
-                    let mi = ctx.add_constant(Value::from_string(method_name.into()));
-                    self.emit(OpCode::MethodCallCustom { dst, method_name_idx: mi, base, arg_count: args.len() as u8 }, &expr.span);
+                let mut arg_names = Vec::new();
+                let mut has_named = false;
+                for arg in args {
+                    if let crate::parser::ast::Argument::Named(id, _) = arg {
+                        has_named = true;
+                        arg_names.push(ctx.interner.lookup(*id).to_string());
+                    } else {
+                        arg_names.push(String::new());
+                    }
                 }
-                self.next_local = (base + 1) as usize;
+
+                let mut arg_count = 0u8;
+                for arg in args { 
+                    let arg_reg = base + 1 + arg_count;
+                    self.next_local = arg_reg as usize;
+                    let src = self.compile_expr(arg.expr(), ctx);
+                    if src != arg_reg {
+                        self.emit(OpCode::Move { dst: arg_reg, src }, &arg.expr().span);
+                    }
+                    arg_count += 1;
+
+                    // Support closures for method calls by pushing captures as hidden arguments
+                    if let crate::parser::ast::ExprKind::Lambda { body, .. } = &arg.expr().kind {
+                        let flat_locals = self.convert_to_flat_locals();
+                        let mut captures = Vec::new();
+                        self.collect_captures(body, &flat_locals, &mut captures);
+                        for id in &captures {
+                            if let Some(slot) = self.lookup_local(id) {
+                                let r_cap = base + 1 + arg_count;
+                                self.next_local = r_cap as usize;
+                                self.emit(OpCode::Move { dst: r_cap, src: slot as u8 }, &arg.expr().span);
+                                arg_count += 1;
+                            }
+                        }
+                    }
+
+                    if method_name == "bind" && arg_count == 2 {
+                        // We do the move later
+                    }
+                }
+                
+                self.next_local = (base + 1 + arg_count) as usize;
+                self.sync_max_locals();
+
+                let dst = self.push_reg();
+                if let Some(kind) = self.map_method_kind(&method_name) {
+                    if has_named {
+                        let names_val = Value::from_string_array(Arc::new(arg_names));
+                        let names_idx = ctx.add_constant(names_val);
+                        self.emit(OpCode::MethodCallNamed { dst, kind, base, arg_count, names_idx }, &expr.span);
+                    } else {
+                        self.emit(OpCode::MethodCall { dst, kind, base, arg_count }, &expr.span);
+                    }
+                } else {
+                    let mi = ctx.add_constant(Value::from_string(Arc::new(method_name.clone().into_bytes())));
+                    self.emit(OpCode::MethodCallCustom { dst, method_name_idx: mi, base, arg_count }, &expr.span);
+                }
+                
+                if method_name == "bind" && args.len() == 2 {
+                    if let crate::parser::ast::ExprKind::Identifier(target_id) = &args[1].expr().kind {
+                        if let Some(slot) = self.lookup_local(target_id) {
+                            let dst_slot = slot as u8;
+                            let src_slot = base + 2; 
+                            self.emit(OpCode::Move { dst: dst_slot, src: src_slot }, &expr.span);
+                        }
+                    }
+                }
+                
                 dst
             }
             crate::parser::ast::ExprKind::Binary { left, op, right } => {
                 let src1 = self.compile_expr(left, ctx);
                 let src2 = self.compile_expr(right, ctx);
-                let dst = src1; // Reuse src1 as dst
+                self.next_local = src1 as usize;
+                let dst = self.push_reg();
                 match op {
                     TokenKind::Plus => self.emit(OpCode::Add { dst, src1, src2 }, &expr.span),
                     TokenKind::Minus => self.emit(OpCode::Sub { dst, src1, src2 }, &expr.span),
@@ -628,16 +852,31 @@ impl FunctionCompiler {
                     TokenKind::Difference => self.emit(OpCode::SetDifference { dst, src1, src2 }, &expr.span),
                     TokenKind::SymDifference => self.emit(OpCode::SetSymDifference { dst, src1, src2 }, &expr.span),
                     TokenKind::PlusPlus => self.emit(OpCode::IntConcat { dst, src1, src2 }, &expr.span),
+                    TokenKind::DoubleColon => {
+                        let base = self.next_local as u8;
+                        let k_src = self.compile_expr(left, ctx);
+                        if k_src != base { self.emit(OpCode::Move { dst: base, src: k_src }, &expr.span); }
+                        self.next_local = (base + 1) as usize;
+
+                        let v_dst = base + 1;
+                        let v_src = self.compile_expr(right, ctx);
+                        if v_src != v_dst { self.emit(OpCode::Move { dst: v_dst, src: v_src }, &expr.span); }
+                        self.next_local = (v_dst + 1) as usize;
+                        self.sync_max_locals();
+
+                        self.emit(OpCode::MapInit { dst, base, count: 1 }, &expr.span);
+                    }
                     _ => {}
                 }
-                self.next_local = (dst + 1) as usize;
+                self.next_local = (dst + 1) as usize; self.sync_max_locals();
                 dst
             }
             crate::parser::ast::ExprKind::Unary { op, right } => {
                 match op {
                     TokenKind::Not | TokenKind::Bang => {
                         let src = self.compile_expr(right, ctx);
-                        let dst = src;
+                        self.next_local = src as usize;
+                        let dst = self.push_reg();
                         self.emit(OpCode::Not { dst, src }, &expr.span);
                         dst
                     }
@@ -652,36 +891,64 @@ impl FunctionCompiler {
                         let src2 = self.compile_expr(right, ctx);
                         let dst = src1;
                         self.emit(OpCode::Sub { dst, src1, src2 }, &expr.span);
-                        self.next_local = (dst + 1) as usize;
+                        self.next_local = (dst + 1) as usize; self.sync_max_locals();
+                        self.sync_max_locals();
                         dst
                     }
-                    _ => self.push_reg() // should not happen
+                    _ => self.push_reg() 
                 }
             }
             crate::parser::ast::ExprKind::Index { receiver, index } => {
                 let base = self.next_local as u8;
-                self.compile_expr(receiver, ctx);
-                self.compile_expr(index, ctx);
-                let dst = base;
+                let r_src = self.compile_expr(receiver, ctx);
+                if r_src != base { self.emit(OpCode::Move { dst: base, src: r_src }, &expr.span); }
+                self.next_local = (base + 1) as usize; 
+
+                let i_src = self.compile_expr(index, ctx);
+                let i_dst = base + 1;
+                if i_src != i_dst { self.emit(OpCode::Move { dst: i_dst, src: i_src }, &expr.span); }
+                self.next_local = (i_dst + 1) as usize;
+
+                let dst = self.push_reg();
                 self.emit(OpCode::MethodCall { dst, kind: MethodKind::Get, base, arg_count: 1 }, &expr.span);
-                self.next_local = (base + 1) as usize;
+                self.next_local = (dst + 1) as usize;
                 dst
             }
             crate::parser::ast::ExprKind::Lambda { params, return_type: _, body } => {
-                let mut sub = FunctionCompiler::new(false, None);
+                let flat_locals = self.convert_to_flat_locals();
+                let mut captures = Vec::new();
+                self.collect_captures(body, &flat_locals, &mut captures);
+
+                let mut sub = FunctionCompiler::new(false, Some(flat_locals));
                 for (i, (_, param_name)) in params.iter().enumerate() {
                     sub.define_local(*param_name, i);
                 }
-                sub.next_local = params.len();
+                
+                for id in &captures {
+                    sub.lookup_local(id);
+                }
+                
+                sub.next_local = params.len() + captures.len();
                 let res = sub.compile_expr(body, ctx);
                 sub.emit(OpCode::Return { src: res }, &expr.span);
                 
                 let fid = ctx.functions.len();
+                let has_loops = sub.bytecode.iter().enumerate().any(|(i, op)| {
+                    match op {
+                        OpCode::Jump { target } => (*target as usize) < i,
+                        OpCode::JumpIfFalse { target, .. } => (*target as usize) < i,
+                        OpCode::JumpIfTrue { target, .. } => (*target as usize) < i,
+                        _ => false,
+                    }
+                });
                 ctx.functions.push(FunctionChunk {
                     bytecode: Arc::new(sub.bytecode),
                     spans: Arc::new(sub.spans),
                     is_fiber: false,
                     max_locals: sub.max_locals_used.max(sub.next_local),
+                    has_loops,
+                    jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
+        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 });
                 
                 let f_val = Value::from_function(fid as u32);
@@ -692,70 +959,122 @@ impl FunctionCompiler {
             }
             crate::parser::ast::ExprKind::Tuple(exprs) => {
                 let base = self.next_local as u8;
-                for e in exprs { self.compile_expr(e, ctx); }
+                for (i, e) in exprs.iter().enumerate() {
+                    let dst = base + i as u8;
+                    self.next_local = dst as usize;
+                    let src = self.compile_expr(e, ctx);
+                    if src != dst { self.emit(OpCode::Move { dst, src }, &expr.span); }
+                    self.next_local = (dst + 1) as usize;
+                    self.sync_max_locals();
+                }
                 let dst = base;
                 self.emit(OpCode::ArrayInit { dst, base, count: exprs.len() as u32 }, &expr.span);
                 self.next_local = (base + 1) as usize;
+                self.sync_max_locals();
                 dst
             }
             crate::parser::ast::ExprKind::ArrayOrSetLiteral { elements } => {
                 let base = self.next_local as u8;
-                for e in elements { self.compile_expr(e, ctx); }
+                for (i, e) in elements.iter().enumerate() {
+                    let dst = base + i as u8;
+                    self.next_local = dst as usize;
+                    let src = self.compile_expr(e, ctx);
+                    if src != dst { self.emit(OpCode::Move { dst, src }, &expr.span); }
+                    self.next_local = (dst + 1) as usize;
+                    self.sync_max_locals();
+                }
                 let dst = base;
                 self.emit(OpCode::ArrayInit { dst, base, count: elements.len() as u32 }, &expr.span);
                 self.next_local = (base + 1) as usize;
+                self.sync_max_locals();
                 dst
             }
-            crate::parser::ast::ExprKind::TerminalCommand(cmd_id, arg) => {
+            crate::parser::ast::ExprKind::TerminalCommand(cmd_id, args) => {
                 let cmd = ctx.interner.lookup(*cmd_id);
                 if cmd == "exit" { self.emit(OpCode::TerminalExit, &expr.span); }
                 else if cmd == "clear" { self.emit(OpCode::TerminalClear, &expr.span); }
                 else if cmd == "run" {
-                    if let Some(a) = arg {
+                    if let Some(a) = args.get(0) {
                         let cmd_src = self.compile_expr(a, ctx);
                         let dst = self.push_reg();
                         self.emit(OpCode::TerminalRun { dst, cmd_src }, &expr.span);
-                        self.pop_reg(); // pop cmd_src
+                        self.pop_reg(); 
                         return dst;
+                    }
+                } else if cmd == "raw" {
+                    self.emit(OpCode::TerminalRaw, &expr.span);
+                } else if cmd == "normal" {
+                    self.emit(OpCode::TerminalNormal, &expr.span);
+                } else if cmd == "cursor" {
+                    if let Some(a) = args.get(0) {
+                        let val_str = match &a.kind {
+                            crate::parser::ast::ExprKind::Identifier(id) => ctx.interner.lookup(*id),
+                            _ => "",
+                        };
+                        if val_str == "on" { self.emit(OpCode::TerminalCursor { on: true }, &expr.span); }
+                        else if val_str == "off" { self.emit(OpCode::TerminalCursor { on: false }, &expr.span); }
+                    }
+                } else if cmd == "move" {
+                    if args.len() >= 2 {
+                        let x_src = self.compile_expr(&args[0], ctx);
+                        let y_src = self.compile_expr(&args[1], ctx);
+                        self.emit(OpCode::TerminalMove { x_src, y_src }, &expr.span);
+                        self.pop_reg(); // pop y_src
+                        self.pop_reg(); // pop x_src
                     }
                 }
                 self.push_reg() // Return dummy
-
             }
             crate::parser::ast::ExprKind::MemberAccess { receiver, member } => {
                 let base = self.next_local as u8;
-                self.compile_expr(receiver, ctx);
+                let receiver_reg = self.compile_expr(receiver, ctx);
+                if receiver_reg != base {
+                    self.emit(OpCode::Move { dst: base, src: receiver_reg }, &expr.span);
+                }
+                self.next_local = (base + 1) as usize;
+
                 let member_name = ctx.interner.lookup(*member).to_string();
-                let dst = base;
+                let dst = self.push_reg();
                 if let Some(kind) = self.map_method_kind(&member_name) {
                     self.emit(OpCode::MethodCall { dst, kind, base, arg_count: 0 }, &expr.span);
                 } else {
-                    let mi = ctx.add_constant(Value::from_string(member_name.into()));
+                    let mi = ctx.add_constant(Value::from_string(Arc::new(member_name.into_bytes())));
                     self.emit(OpCode::MethodCallCustom { dst, method_name_idx: mi, base, arg_count: 0 }, &expr.span);
                 }
-                self.next_local = (base + 1) as usize;
+                self.next_local = (dst + 1) as usize;
                 dst
             }
             crate::parser::ast::ExprKind::TableLiteral { columns, rows } => {
                 let base = self.next_local as u8;
-                for row in rows { for val in row { self.compile_expr(val, ctx); } }
+                let mut current_idx = 0;
+                for row in rows {
+                    for val in row {
+                        let dst = base + current_idx as u8;
+                        let src = self.compile_expr(val, ctx);
+                        if src != dst { self.emit(OpCode::Move { dst, src }, &expr.span); }
+                        self.next_local = (dst + 1) as usize; self.sync_max_locals();
+                        current_idx += 1;
+                    }
+                }
                 let vm_cols = columns.iter().map(|c| crate::backend::vm::VMColumn {
                     name: ctx.interner.lookup(c.name).to_string(),
                     ty: c.ty.clone(),
-                    is_auto: c.is_auto,
+                    is_auto: c.is_auto(),
+                    is_pk: c.is_pk(),
                 }).collect();
                 let skeleton = Value::from_table(Arc::new(RwLock::new(
-                    crate::backend::vm::TableData { columns: vm_cols, rows: Vec::new() }
+                    crate::backend::vm::TableData { table_name: String::new(), columns: vm_cols, rows: Vec::new(), sql_binding: None, sql_where: None, pending_op: None }
                 )));
                 let ci = ctx.add_constant(skeleton);
                 let dst = base;
                 self.emit(OpCode::TableInit { dst, skeleton_idx: ci, base, row_count: rows.len() as u32 }, &expr.span);
                 self.next_local = (base + 1) as usize;
+                self.sync_max_locals();
                 dst
             }
             crate::parser::ast::ExprKind::RawBlock(id) => {
                 let s = ctx.interner.lookup(*id).to_string();
-                let i = ctx.add_constant(Value::from_string(s.into()));
+                let i = ctx.add_constant(Value::from_string(Arc::new(s.into_bytes())));
                 let dst = self.push_reg();
                 self.emit(OpCode::LoadConst { dst, idx: i }, &expr.span);
                 dst
@@ -770,10 +1089,10 @@ impl FunctionCompiler {
                     self.emit(OpCode::LoadConst { dst: r, idx: f }, &expr.span);
                     r
                 };
-                let method_idx = ctx.add_constant(Value::from_string(ctx.interner.lookup(*method).to_string().into()));
+                let method_idx = ctx.add_constant(Value::from_string(Arc::new(ctx.interner.lookup(*method).to_string().into_bytes())));
                 let dst = url_src;
                 self.emit(OpCode::HttpCall { dst, method_idx, url_src, body_src }, &expr.span);
-                self.next_local = (dst + 1) as usize;
+                self.next_local = (dst + 1) as usize; self.sync_max_locals();
                 dst
             }
             crate::parser::ast::ExprKind::NetRespond { status, body, headers } => {
@@ -788,8 +1107,81 @@ impl FunctionCompiler {
                     r
                 };
                 self.emit(OpCode::HttpRespond { status_src, body_src, headers_src }, &expr.span);
-                self.next_local = status_src as usize; // Cleanup temps
-                self.push_reg() // Return dummy
+                self.next_local = status_src as usize;
+                status_src
+            }
+            crate::parser::ast::ExprKind::As { expr, name } => {
+                let src = self.compile_expr(expr, ctx);
+                if let Some(slot) = self.lookup_local(name) {
+                    self.emit(OpCode::Move { dst: slot as u8, src }, &expr.span);
+                } else if let Some(&idx) = ctx.globals.get(name) {
+                    self.emit(OpCode::SetVar { idx: idx as u32, src }, &expr.span);
+                } else {
+                    let slot = self.push_reg() as usize;
+                    self.define_local(*name, slot);
+                    self.emit(OpCode::Move { dst: slot as u8, src }, &expr.span);
+                }
+                src
+            }
+            crate::parser::ast::ExprKind::DatabaseLiteral(fields) => {
+                let mut engine_reg = 0;
+                let mut path_reg = 0;
+                let mut found_engine = false;
+                let mut found_path = false;
+                
+                for (name, expr) in fields {
+                    let name_str = ctx.interner.lookup(*name);
+                    if name_str == "engine" {
+                        engine_reg = self.compile_expr(expr, ctx);
+                        found_engine = true;
+                    } else if name_str == "path" {
+                        path_reg = self.compile_expr(expr, ctx);
+                        found_path = true;
+                    }
+                }
+                
+                if !found_engine || !found_path {
+                    return self.push_reg();
+                }
+
+                let base = self.next_local as u8;
+                let mut table_count = 0;
+                for (name, expr) in fields {
+                    let name_str = ctx.interner.lookup(*name);
+                    if name_str != "engine" && name_str != "path" {
+                        let name_idx = ctx.add_constant(Value::from_string(Arc::new(name_str.to_string().into_bytes())));
+                        let nr = base + (table_count as u8 * 2);
+                        self.emit(OpCode::LoadConst { dst: nr, idx: name_idx }, &expr.span);
+                        self.next_local = (nr + 1) as usize;
+                        self.sync_max_locals();
+
+                        let tr = nr + 1;
+                        let src = self.compile_expr(expr, ctx);
+                        if src != tr { self.emit(OpCode::Move { dst: tr, src }, &expr.span); }
+                        self.next_local = (tr + 1) as usize;
+                        self.sync_max_locals();
+                        
+                        table_count += 1;
+                    }
+                }
+                
+                let dst = engine_reg;
+                self.emit(OpCode::DatabaseInit { 
+                    dst, 
+                    engine_src: engine_reg, 
+                    path_src: path_reg, 
+                    tables_base_reg: base, 
+                    table_count 
+                }, &expr.span);
+                
+                self.next_local = (dst + 1) as usize; self.sync_max_locals();
+                dst
+            }
+            crate::parser::ast::ExprKind::Yield(v) => {
+                let src = self.compile_expr(v, ctx);
+                let dst = src;
+                self.emit(OpCode::Yield { src }, &expr.span);
+                dst
             }
         }
     }
@@ -812,6 +1204,15 @@ impl FunctionCompiler {
                     };
                     let idx = *ctx.globals.get(name).expect("Global not registered");
                     self.emit(OpCode::SetVar { idx: idx as u32, src }, &stmt.span);
+                    
+                    if let Some(val) = value {
+                        if let crate::parser::ast::ExprKind::TableLiteral { .. } = &val.kind {
+                            let name_str = ctx.interner.lookup(*name).to_string();
+                            let name_idx = ctx.add_constant(Value::from_string(Arc::new(name_str.into_bytes())));
+                            self.emit(OpCode::SetName { src, name_idx }, &stmt.span);
+                        }
+                    }
+
                     self.pop_reg();
                     return;
                 } else {
@@ -825,7 +1226,13 @@ impl FunctionCompiler {
                     if src != dst {
                         self.emit(OpCode::Move { dst, src }, &stmt.span);
                     }
-                    self.next_local = (dst + 1) as usize; // Keep dst, pop src if it was temp
+                    if let crate::parser::ast::ExprKind::TableLiteral { .. } = val.kind {
+                        let name_str = ctx.interner.lookup(*name).to_string();
+                        let name_idx = ctx.add_constant(Value::from_string(Arc::new(name_str.into_bytes())));
+                        self.emit(OpCode::SetName { src: dst, name_idx }, &stmt.span);
+                    }
+                    self.next_local = (dst + 1) as usize; self.sync_max_locals(); // Keep dst, pop src if it was temp
+                    self.sync_max_locals();
                 } else {
                     let default_val = self.get_default_value(ty, ctx);
                     let idx = ctx.add_constant(default_val);
@@ -837,23 +1244,43 @@ impl FunctionCompiler {
                 self.emit(OpCode::Print { src }, &stmt.span);
                 self.pop_reg();
             }
+            crate::parser::ast::StmtKind::TerminalWrite(expr) => {
+                let src = self.compile_expr(expr, ctx);
+                self.emit(OpCode::TerminalWrite { src }, &stmt.span);
+                self.pop_reg();
+            }
             crate::parser::ast::StmtKind::FunctionCallStmt { name, args } => {
                 let base = self.next_local as u8;
-                for arg in args { self.compile_expr(arg, ctx); }
+                for (i, arg) in args.iter().enumerate() {
+                    let dst = base + i as u8;
+                    let src = self.compile_expr(arg.expr(), ctx);
+                    if src != dst { self.emit(OpCode::Move { dst, src }, &stmt.span); }
+                    self.next_local = (dst + 1) as usize;
+                }
                 if let Some(&func_id) = ctx.func_indices.get(name) {
                     let dst = base; // discard result or store in base
                     self.emit(OpCode::Call { dst, func_idx: func_id as u32, base, arg_count: args.len() as u8 }, &stmt.span);
                 }
                 self.next_local = base as usize;
             }
-            crate::parser::ast::StmtKind::Input(name) => {
-                let dst = self.push_reg();
-                self.emit(OpCode::Input { dst }, &stmt.span);
-                if let Some(slot) = self.lookup_local(name) {
-                    self.emit(OpCode::Move { dst: slot as u8, src: dst }, &stmt.span);
-                } else if let Some(&global_idx) = ctx.globals.get(name) {
-                    self.emit(OpCode::SetVar { idx: global_idx as u32, src: dst }, &stmt.span);
-                }
+            crate::parser::ast::StmtKind::Input(name, ty) => {
+                let dst = if let Some(slot) = self.lookup_local(name) {
+                    slot as u8
+                } else {
+                    let slot = self.push_reg() as usize;
+                    self.define_local(*name, slot);
+                    slot as u8
+                };
+                
+                let type_tag = match ty {
+                    crate::parser::ast::Type::Int => TypeTag::Int,
+                    crate::parser::ast::Type::Float => TypeTag::Float,
+                    crate::parser::ast::Type::String => TypeTag::String,
+                    crate::parser::ast::Type::Bool => TypeTag::Bool,
+                    _ => TypeTag::Unknown,
+                };
+
+                self.emit(OpCode::Input { dst, ty: type_tag }, &stmt.span);
                 self.pop_reg();
             }
             crate::parser::ast::StmtKind::Assign { name, value } => {
@@ -940,8 +1367,9 @@ impl FunctionCompiler {
                 }
             }
             crate::parser::ast::StmtKind::While { condition, body } => {
+                self.loop_stack.push((0, Vec::new(), Vec::new(), None));
                 let start_p = self.bytecode.len();
-                self.loop_stack.push((start_p, Vec::new(), Vec::new(), None));
+                if let Some(l) = self.loop_stack.last_mut() { l.0 = start_p; }
                 
                 let cond_reg = self.compile_expr(condition, ctx);
                 let exit_jmp = self.bytecode.len();
@@ -972,32 +1400,39 @@ impl FunctionCompiler {
                 match iter_type {
                     crate::parser::ast::ForIterType::Array => {
                         // 1. Compile the array expression (receiver)
-                        let array_reg = self.compile_expr(start, ctx);  // receiver in array_reg
+                        let array_reg_raw = self.compile_expr(start, ctx);
+                        self.pop_reg(); // Release the raw register
 
-                        // 2. Reserve the argument slot (array_reg+1)
-                        let arg_reg = self.push_reg();                  // must be array_reg+1
-                        debug_assert_eq!(arg_reg, array_reg + 1, "Argument register not consecutive");
+                        let receiver_reg = self.push_reg();
+                        self.emit(OpCode::Move { dst: receiver_reg, src: array_reg_raw }, &stmt.span);
+                        
+                        let arg_reg = self.push_reg();                  // base + 1 (argument slot for .get)
+                        let size_reg = self.push_reg();                 // base + 2
+                        let index_reg = self.push_reg();                // base + 3
 
                         // 3. Get array size (for loop bound)
-                        let size_reg = self.push_reg();
-                        self.emit(OpCode::MethodCall { dst: size_reg, kind: MethodKind::Size, base: array_reg, arg_count: 0 }, &stmt.span);
+                        self.emit(OpCode::MethodCall { dst: size_reg, kind: MethodKind::Size, base: receiver_reg, arg_count: 0 }, &stmt.span);
 
                         // 4. Index register (starts at 0)
                         let zero_idx = ctx.add_constant(Value::from_i64(0));
-                        let index_reg = self.push_reg();
                         self.emit(OpCode::LoadConst { dst: index_reg, idx: zero_idx }, &stmt.span);
 
-                        // 5. Loop variable (the element)
-                        let loop_var_reg = if let Some(s) = self.lookup_local(var_name) { s as u8 } else {
+                        let loop_var_reg = if let Some(s) = self.lookup_local(var_name) {
+                            let r = s as u8;
+                            if s >= self.next_local { self.next_local = s + 1; }
+                            r
+                        } else {
                             let s = self.push_reg();
                             self.define_local(*var_name, s as usize);
                             s
                         };
 
-                        let start_label = self.bytecode.len();
                         self.enter_scope();
-                        self.loop_stack.push((start_label, Vec::new(), Vec::new(), None));
+                        self.loop_stack.push((0, Vec::new(), Vec::new(), None));
+                        let start_label = self.bytecode.len();
+                        if let Some(l) = self.loop_stack.last_mut() { l.0 = start_label; }
 
+                        // Capture register state AFTER allocating all loop management and iter registers
                         let saved_next_local = self.next_local;
 
                         // Loop condition: index < size
@@ -1007,30 +1442,21 @@ impl FunctionCompiler {
                         self.emit(OpCode::JumpIfFalse { src: test_reg, target: 0 }, &stmt.span);
                         self.pop_reg(); // test_reg
 
-                        // *** FIX: copy index to argument slot before calling .get ***
+                        // Target for the fused loop step (calling .get)
+                        let body_start = self.bytecode.len();
                         self.emit(OpCode::Move { dst: arg_reg, src: index_reg }, &stmt.span);
-                        self.emit(OpCode::MethodCall { dst: loop_var_reg, kind: MethodKind::Get, base: array_reg, arg_count: 1 }, &stmt.span);
+                        self.emit(OpCode::MethodCall { dst: loop_var_reg, kind: MethodKind::Get, base: receiver_reg, arg_count: 1 }, &stmt.span);
 
                         // Execute loop body
                         for s in body { self.compile_stmt(s, ctx); }
 
-                        // Restore register stack after body
-                        self.next_local = saved_next_local;
+                        // Restore register stack after body to protected state
+                        self.next_local = saved_next_local as usize;
 
-                        // Increment index and jump back
+                        // Atomic Step: index++, if (index < size) jump body_start
                         let cont_label = self.bytecode.len();
-                        let len = self.bytecode.len();
-                        if len > 0 {
-                            if let OpCode::IncLocal { reg } = self.bytecode[len - 1] {
-                                self.bytecode.pop();
-                                self.emit(OpCode::IncLocalLoopNext { inc_reg: reg, reg: index_reg, limit_reg: size_reg, target: start_label as u32 }, &stmt.span);
-                            } else {
-                                self.emit(OpCode::IncLocal { reg: index_reg }, &stmt.span);
-                                self.emit(OpCode::Jump { target: start_label as u32 }, &stmt.span);
-                            }
-                        }
+                        self.emit(OpCode::ArrayLoopNext { idx_reg: index_reg, size_reg, target: body_start as u32 }, &stmt.span);
                         
-
                         let end_label = self.bytecode.len() as u32;
                         if let OpCode::JumpIfFalse { ref mut target, .. } = self.bytecode[exit_jmp] {
                             *target = end_label;
@@ -1045,35 +1471,42 @@ impl FunctionCompiler {
                             if let OpCode::Jump { ref mut target } = self.bytecode[c] { *target = cont_label as u32; }
                         }
 
-                        // Clean up – all registers up to array_reg are now unused
-                        self.next_local = array_reg as usize;
+                        // Clean up – all registers up to and including the copier and management are now unused
+                        self.next_local = receiver_reg as usize;
                     }
                     crate::parser::ast::ForIterType::Set => {
                         // 1. Compile the set expression (receiver)
-                        let set_reg = self.compile_expr(start, ctx);
+                        let set_reg_raw = self.compile_expr(start, ctx);
+                        self.pop_reg();
 
-                        // 2. Convert Set to Array using .values() method
+                        // 2. Convert Set to Array using .values() method into a fresh consecutive block
                         let array_reg = self.push_reg();
-                        self.emit(OpCode::MethodCall { dst: array_reg, kind: MethodKind::Values, base: set_reg, arg_count: 0 }, &stmt.span);
+                        self.emit(OpCode::MethodCall { dst: array_reg, kind: MethodKind::Values, base: set_reg_raw, arg_count: 0 }, &stmt.span);
 
-                        // 3. Delegate to Array iteration logic (re-using array_reg)
+                        // 3. Setup iteration registers
                         let arg_reg = self.push_reg();
                         let size_reg = self.push_reg();
+                        let index_reg = self.push_reg();
+                        
                         self.emit(OpCode::MethodCall { dst: size_reg, kind: MethodKind::Size, base: array_reg, arg_count: 0 }, &stmt.span);
 
                         let zero_idx = ctx.add_constant(Value::from_i64(0));
-                        let index_reg = self.push_reg();
                         self.emit(OpCode::LoadConst { dst: index_reg, idx: zero_idx }, &stmt.span);
 
-                        let loop_var_reg = if let Some(s) = self.lookup_local(var_name) { s as u8 } else {
+                        let loop_var_reg = if let Some(s) = self.lookup_local(var_name) {
+                            let r = s as u8;
+                            if s >= self.next_local { self.next_local = s + 1; }
+                            r
+                        } else {
                             let s = self.push_reg();
                             self.define_local(*var_name, s as usize);
                             s
                         };
 
-                        let start_label = self.bytecode.len();
                         self.enter_scope();
-                        self.loop_stack.push((start_label, Vec::new(), Vec::new(), None));
+                        self.loop_stack.push((0, Vec::new(), Vec::new(), None));
+                        let start_label = self.bytecode.len();
+                        if let Some(l) = self.loop_stack.last_mut() { l.0 = start_label; }
 
                         let saved_next_local = self.next_local;
 
@@ -1083,6 +1516,7 @@ impl FunctionCompiler {
                         self.emit(OpCode::JumpIfFalse { src: test_reg, target: 0 }, &stmt.span);
                         self.pop_reg();
 
+                        let body_start = self.bytecode.len();
                         self.emit(OpCode::Move { dst: arg_reg, src: index_reg }, &stmt.span);
                         self.emit(OpCode::MethodCall { dst: loop_var_reg, kind: MethodKind::Get, base: array_reg, arg_count: 1 }, &stmt.span);
 
@@ -1091,8 +1525,7 @@ impl FunctionCompiler {
                         self.next_local = saved_next_local;
 
                         let cont_label = self.bytecode.len();
-                        self.emit(OpCode::IncLocal { reg: index_reg }, &stmt.span);
-                        self.emit(OpCode::Jump { target: start_label as u32 }, &stmt.span);
+                        self.emit(OpCode::ArrayLoopNext { idx_reg: index_reg, size_reg, target: body_start as u32 }, &stmt.span);
 
                         let end_label = self.bytecode.len() as u32;
                         if let OpCode::JumpIfFalse { ref mut target, .. } = self.bytecode[exit_jmp] {
@@ -1108,23 +1541,26 @@ impl FunctionCompiler {
                             if let OpCode::Jump { ref mut target } = self.bytecode[c] { *target = cont_label as u32; }
                         }
 
-                        // Clean up – all registers up to set_reg are now unused
-                        self.next_local = set_reg as usize;
+                        self.next_local = set_reg_raw as usize;
                     }
 
                     crate::parser::ast::ForIterType::Range => {
-                        let start_reg = self.compile_expr(start, ctx);
-                        // ✅ NOWY KOD
-                        let loop_var_reg = self.push_reg();  // ZAWSZE nowy rejestr!
+                        let start_reg_raw = self.compile_expr(start, ctx);
+                        self.pop_reg();
+
+                        // Preserve a fresh block for range iteration
+                        let loop_var_reg = self.push_reg(); 
+                        self.emit(OpCode::Move { dst: loop_var_reg, src: start_reg_raw }, &stmt.span);
                         self.define_local(*var_name, loop_var_reg as usize);
-                        self.emit(OpCode::Move { dst: loop_var_reg, src: start_reg }, &stmt.span);
+
                         let limit_reg = self.compile_expr(end, ctx);
+                        // next_local is now protected at (limit_reg + 1)
                         
-                        let start_p = self.bytecode.len();
                         self.enter_scope();
-                        self.loop_stack.push((start_p, Vec::new(), Vec::new(), None));
+                        self.loop_stack.push((0, Vec::new(), Vec::new(), None));
+                        let start_p = self.bytecode.len();
+                        if let Some(l) = self.loop_stack.last_mut() { l.0 = start_p; }
                         
-                        // Save the register state before loop body to prevent register corruption
                         let saved_next_local = self.next_local;
                         
                         let test_reg = self.push_reg();
@@ -1134,23 +1570,40 @@ impl FunctionCompiler {
                         self.pop_reg();
                         
                         let body_p = self.bytecode.len();
-                        for s in body { self.compile_stmt(s, ctx); }
+                        let mut last_stmt_start = body_p;
+                        let body_len = body.len();
+                        for (i, s) in body.iter().enumerate() {
+                            if i == body_len - 1 { last_stmt_start = self.bytecode.len(); }
+                            self.compile_stmt(s, ctx);
+                        }
                         
-                        // Restore register state to prevent temp registers from corrupting loop variables
                         self.next_local = saved_next_local;
                         
                         let cont_label = self.bytecode.len();
                         if step.is_none() {
                             let len = self.bytecode.len();
                             let mut fused = false;
-                            if len > 0 {
-                                if let OpCode::IncVar { idx } = self.bytecode[len - 1] {
-                                    self.bytecode.pop();
-                                    self.spans.pop();
-                                    self.emit(OpCode::IncVarLoopNext { g_idx: idx, reg: loop_var_reg, limit_reg, target: body_p as u32 }, &stmt.span);
-                                    fused = true;
+                            
+                            // Safe fusion heuristic: only fuse if the last statement emitted exactly ONE opcode.
+                            // This prevent ripping increments out of conditional blocks (like in Sieve).
+                            if len == last_stmt_start + 1 {
+                                match self.bytecode[len - 1] {
+                                    OpCode::IncVar { idx } => {
+                                        self.bytecode.pop();
+                                        self.spans.pop();
+                                        self.emit(OpCode::IncVarLoopNext { g_idx: idx, reg: loop_var_reg, limit_reg, target: body_p as u32 }, &stmt.span);
+                                        fused = true;
+                                    }
+                                    OpCode::IncLocal { reg } => {
+                                        self.bytecode.pop();
+                                        self.spans.pop();
+                                        self.emit(OpCode::IncLocalLoopNext { inc_reg: reg, reg: loop_var_reg, limit_reg, target: body_p as u32 }, &stmt.span);
+                                        fused = true;
+                                    }
+                                    _ => {}
                                 }
                             }
+                            
                             if !fused {
                                 self.emit(OpCode::LoopNext { reg: loop_var_reg, limit_reg, target: body_p as u32 }, &stmt.span);
                             }
@@ -1174,17 +1627,25 @@ impl FunctionCompiler {
                         for c in continues {
                             if let OpCode::Jump { ref mut target } = self.bytecode[c] { *target = cont_label as u32; }
                         }
-                        self.next_local = (loop_var_reg + 1) as usize;
+                        self.next_local = loop_var_reg as usize;
                     }
                     crate::parser::ast::ForIterType::Fiber => {
                         let fiber_reg = self.compile_expr(start, ctx);
-                        // ✅ NOWY KOD
-                        let loop_var_reg = self.push_reg();  // ZAWSZE nowy rejestr!
-                        self.define_local(*var_name, loop_var_reg as usize);
-                        let start_label = self.bytecode.len();
-                        self.enter_scope();
-                        self.loop_stack.push((start_label, Vec::new(), Vec::new(), Some(fiber_reg as usize)));
+                        let loop_var_reg = if let Some(s) = self.lookup_local(var_name) {
+                            let r = s as u8;
+                            if s >= self.next_local { self.next_local = s + 1; }
+                            r
+                        } else {
+                            let s = self.push_reg();
+                            self.define_local(*var_name, s as usize);
+                            s
+                        };
                         
+                        self.enter_scope();
+                        self.loop_stack.push((0, Vec::new(), Vec::new(), Some(fiber_reg as usize)));
+                        let start_label = self.bytecode.len();
+                        if let Some(l) = self.loop_stack.last_mut() { l.0 = start_label; }
+
                         // Save the register state before loop body to prevent register corruption
                         let saved_next_local = self.next_local;
                         
@@ -1195,6 +1656,14 @@ impl FunctionCompiler {
                         self.pop_reg();
                         
                         self.emit(OpCode::MethodCall { dst: loop_var_reg, kind: MethodKind::Next, base: fiber_reg, arg_count: 0 }, &stmt.span);
+                        
+                        // Check completion again after Next – if done, skip the body (this was a final Return value)
+                        let test_reg_after = self.push_reg();
+                        self.emit(OpCode::MethodCall { dst: test_reg_after, kind: MethodKind::IsDone, base: fiber_reg, arg_count: 0 }, &stmt.span);
+                        let skip_jmp_idx = self.bytecode.len();
+                        self.emit(OpCode::JumpIfTrue { src: test_reg_after, target: 0 }, &stmt.span);
+                        self.pop_reg(); // test_reg_after
+                        
                         for s in body { self.compile_stmt(s, ctx); }
                         
                         // Restore register state to prevent temp registers from corrupting loop variables
@@ -1205,6 +1674,9 @@ impl FunctionCompiler {
                         
                         let end_label = self.bytecode.len() as u32;
                         if let OpCode::JumpIfTrue { ref mut target, .. } = self.bytecode[exit_jmp] {
+                            *target = end_label;
+                        }
+                        if let OpCode::JumpIfTrue { ref mut target, .. } = self.bytecode[skip_jmp_idx] {
                             *target = end_label;
                         }
                         
@@ -1265,11 +1737,26 @@ impl FunctionCompiler {
                 if fc.bytecode.is_empty() || !matches!(fc.bytecode.last(), Some(OpCode::Return { .. }) | Some(OpCode::ReturnVoid)) {
                     fc.emit(OpCode::ReturnVoid, &stmt.span);
                 }
+                let has_loops = fc.bytecode.iter().enumerate().any(|(i, op)| {
+                    match op {
+                        OpCode::Jump { target } => (*target as usize) < i,
+                        OpCode::JumpIfFalse { target, .. } => (*target as usize) < i,
+                        OpCode::JumpIfTrue { target, .. } => (*target as usize) < i,
+                        OpCode::LoopNext { target, .. } => (*target as usize) < i,
+                        OpCode::IncLocalLoopNext { target, .. } => (*target as usize) < i,
+                        OpCode::IncVarLoopNext { target, .. } => (*target as usize) < i,
+                        OpCode::ArrayLoopNext { target, .. } => (*target as usize) < i,
+                        _ => false,
+                    }
+                });
                 let chunk = FunctionChunk {
                     bytecode: Arc::new(fc.bytecode),
                     spans: Arc::new(fc.spans),
                     is_fiber: false,
                     max_locals: fc.max_locals_used.max(fc.next_local),
+                    has_loops,
+                    jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
+        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 };
                 let fid = ctx.func_indices.get(name).copied().unwrap_or(0);
                 ctx.functions[fid] = chunk;
@@ -1284,18 +1771,34 @@ impl FunctionCompiler {
                 if fc.bytecode.is_empty() || !matches!(fc.bytecode.last(), Some(OpCode::Return { .. }) | Some(OpCode::ReturnVoid)) {
                     fc.emit(OpCode::ReturnVoid, &stmt.span);
                 }
+                let has_loops = fc.bytecode.iter().enumerate().any(|(i, op)| {
+                    match op {
+                        OpCode::Jump { target } => (*target as usize) < i,
+                        OpCode::JumpIfFalse { target, .. } => (*target as usize) < i,
+                        OpCode::JumpIfTrue { target, .. } => (*target as usize) < i,
+                        _ => false,
+                    }
+                });
                 let chunk = FunctionChunk {
                     bytecode: Arc::new(fc.bytecode),
                     spans: Arc::new(fc.spans),
                     is_fiber: true,
                     max_locals: fc.max_locals_used.max(fc.next_local),
+                    has_loops,
+                    jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
+        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 };
                 let fid = ctx.func_indices.get(name).copied().unwrap_or(0);
                 ctx.functions[fid] = chunk;
             }
             crate::parser::ast::StmtKind::FiberDecl { name, fiber_name, args, .. } => {
                 let base = self.next_local as u8;
-                for arg in args { self.compile_expr(arg, ctx); }
+                for (i, arg) in args.iter().enumerate() {
+                    let dst = base + i as u8;
+                    let src = self.compile_expr(arg.expr(), ctx);
+                    if src != dst { self.emit(OpCode::Move { dst, src }, &stmt.span); }
+                    self.next_local = (dst + 1) as usize;
+                }
                 let f_idx = ctx.func_indices.get(fiber_name).copied().unwrap_or(0);
                 let dst = if let Some(s) = self.lookup_local(name) { s as u8 } else {
                     let s = self.push_reg();
@@ -1303,7 +1806,7 @@ impl FunctionCompiler {
                     s
                 };
                 self.emit(OpCode::FiberCreate { dst, func_idx: f_idx as u32, base, arg_count: args.len() as u8 }, &stmt.span);
-                self.next_local = (dst + 1) as usize;
+                self.next_local = (dst + 1) as usize; self.sync_max_locals();
             }
             crate::parser::ast::StmtKind::JsonBind { json, path, target } => {
                 let json_src = self.compile_expr(json, ctx);
@@ -1404,7 +1907,7 @@ impl FunctionCompiler {
                     s as u8
                 };
                 self.emit(OpCode::HttpRequest { dst, arg_src }, &stmt.span);
-                self.next_local = (dst + 1) as usize;
+                self.next_local = (dst + 1) as usize; self.sync_max_locals();
             }
             crate::parser::ast::StmtKind::Serve { name, port, host, workers, routes } => {
                 let port_src    = self.compile_expr(port, ctx);
@@ -1417,6 +1920,7 @@ impl FunctionCompiler {
                 let func_idx = ctx.func_indices.get(name).copied().unwrap_or(0);
                 self.emit(OpCode::HttpServe { func_idx: func_idx as u32, port_src, host_src, workers_src, routes_src }, &stmt.span);
                 self.next_local = port_src as usize;
+                self.sync_max_locals();
             }
             crate::parser::ast::StmtKind::Include { .. } => {
                 // Handled in pre-processor
@@ -1442,6 +1946,9 @@ fn register_globals_recursive(
                     spans: Arc::new(Vec::new()),
                     is_fiber: false,
                     max_locals: 0,
+                    has_loops: false,
+                    jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
+        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 });
                 register_globals_recursive(body, globals, func_indices, functions, false);
             }
@@ -1453,6 +1960,9 @@ fn register_globals_recursive(
                     spans: Arc::new(Vec::new()),
                     is_fiber: true,
                     max_locals: 0,
+                    has_loops: false,
+                    jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
+        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 });
                 register_globals_recursive(body, globals, func_indices, functions, false);
             }
@@ -1505,7 +2015,7 @@ impl Compiler {
     }
 
     pub fn compile(&mut self, program: &crate::parser::ast::Program, interner: &mut Interner) -> (FunctionChunk, Arc<Vec<Value>>, Arc<Vec<FunctionChunk>>) {
-        let built_ins = ["json", "date", "random", "store"];
+        let built_ins = ["json", "date", "random", "store", "input"];
         for (i, name) in built_ins.iter().enumerate() {
             let id = interner.intern(name);
             self.globals.insert(id, i);
@@ -1521,8 +2031,8 @@ impl Compiler {
         };
         let mut main_compiler = FunctionCompiler::new(true, None);
         let dummy_span = crate::lexer::token::Span { line: 0, col: 0, len: 0 };
-        for (i, name) in ["json", "date", "random", "store"].iter().enumerate() {
-            let val = ctx.add_constant(Value::from_string(name.to_string().into()));
+        for (i, name) in ["json", "date", "random", "store", "input"].iter().enumerate() {
+            let val = ctx.add_constant(Value::from_string(Arc::new(name.to_string().into_bytes())));
             let dst = main_compiler.push_reg();
             main_compiler.emit(OpCode::LoadConst { dst, idx: val }, &dummy_span);
             main_compiler.emit(OpCode::SetVar { idx: i as u32, src: dst }, &dummy_span);
@@ -1543,12 +2053,26 @@ impl Compiler {
                 _ => main_compiler.compile_stmt(stmt, &mut ctx),
             }
         }
-        main_compiler.emit(OpCode::Halt, &dummy_span);
+        let has_loops = main_compiler.bytecode.iter().enumerate().any(|(i, op)| {
+            match op {
+                OpCode::Jump { target } => (*target as usize) < i,
+                OpCode::JumpIfFalse { target, .. } => (*target as usize) < i,
+                OpCode::JumpIfTrue { target, .. } => (*target as usize) < i,
+                OpCode::LoopNext { target, .. } => (*target as usize) < i,
+                OpCode::IncLocalLoopNext { target, .. } => (*target as usize) < i,
+                OpCode::IncVarLoopNext { target, .. } => (*target as usize) < i,
+                OpCode::ArrayLoopNext { target, .. } => (*target as usize) < i,
+                _ => false,
+            }
+        });
         let main_chunk = FunctionChunk {
             bytecode: Arc::new(main_compiler.bytecode),
             spans: Arc::new(main_compiler.spans),
             is_fiber: false,
             max_locals: main_compiler.max_locals_used.max(main_compiler.next_local),
+            has_loops,
+            jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
+        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         };
         (main_chunk, Arc::new(std::mem::take(&mut self.constants)), Arc::new(std::mem::take(&mut self.functions)))
     }
@@ -1574,10 +2098,22 @@ fn compile_function_helper(
         let dummy_span = crate::lexer::token::Span { line: 0, col: 0, len: 0 };
         compiler.emit(OpCode::ReturnVoid, &dummy_span);
     }
+    let has_loops = compiler.bytecode.iter().enumerate().any(|(i, op)| {
+        match op {
+            OpCode::Jump { target } => (*target as usize) < i,
+            OpCode::JumpIfFalse { target, .. } => (*target as usize) < i,
+            OpCode::JumpIfTrue { target, .. } => (*target as usize) < i,
+            _ => false,
+        }
+    });
+
     FunctionChunk {
         bytecode: Arc::new(compiler.bytecode),
         spans: Arc::new(compiler.spans),
         is_fiber,
         max_locals: compiler.max_locals_used.max(compiler.next_local),
+        has_loops,
+        jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
+        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     }
 }

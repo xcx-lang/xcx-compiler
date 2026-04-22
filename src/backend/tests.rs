@@ -53,7 +53,9 @@ mod tests {
     fn assert_str(vm: &Arc<VM>, idx: usize, expected: &str, msg: &str) {
         match vm.get_global(idx) {
             Some(v) if v.is_ptr() => {
-                assert_eq!(v.as_string().as_ref(), expected, "{}", msg);
+                let s_bytes = v.as_string();
+                let s_str = String::from_utf8_lossy(&s_bytes);
+                assert_eq!(s_str, expected, "{}", msg);
             }
             other => panic!("{}: expected Str({:?}), got {:?}", msg, expected, other),
         }
@@ -265,7 +267,9 @@ mod tests {
 
         match vm.get_global(err_idx) {
             Some(v) if v.is_ptr() => {
-                assert!(v.as_string().contains("SSRF"), "Expected SSRF error string");
+                let s_bytes = v.as_string();
+                let s_str = String::from_utf8_lossy(&s_bytes);
+                assert!(s_str.contains("SSRF"), "Expected SSRF error string, got: {}", s_str);
             }
             other => panic!("SSRF protection test failed! Expected error string, got {:?}", other),
         }
@@ -639,5 +643,63 @@ mod tests {
     #[test]
     fn test_value_size_is_8_bytes() {
         assert_eq!(std::mem::size_of::<Value>(), 8, "Value must be exactly 8 bytes (NaN-boxed)");
+    }
+
+    #[test]
+    fn test_jit_fibonacci() {
+        let source = r#"
+            func fib(i: n -> i) {
+                if (n < 2) then; return n; end;
+                return fib(n - 1) + fib(n - 2);
+            };
+            i: result = fib(10);
+        "#;
+        let mut parser = Parser::new(source);
+        let mut program = parser.parse_program();
+        let mut interner = parser.into_interner();
+        let mut checker = Checker::new(&interner);
+        let mut symbols = SymbolTable::new();
+        let _ = checker.check(&mut program, &mut symbols);
+        
+        let id_name = interner.intern("result");
+        let mut compiler = XCXCompiler::new();
+        let (main_chunk, constants, functions) = compiler.compile(&program, &mut interner);
+        let idx = compiler.get_global_idx(id_name);
+        
+        let vm = Arc::new(VM::new());
+        let ctx = SharedContext { constants, functions };
+        vm.clone().run(main_chunk, ctx);
+        assert_int(&vm, idx, 55, "fib(10) should be 55");
+    }
+
+    #[test]
+    fn test_jit_sieve() {
+        let source = r#"
+            set:N: primes {2,,100};
+            for p in 2 to 10 do;
+                if (primes.contains(p)) then;
+                    for mult in (p * p) to 100 @step p do;
+                        primes.remove(mult);
+                    end;
+                end;
+            end;
+            i: count = primes.size();
+        "#;
+        let mut parser = Parser::new(source);
+        let mut program = parser.parse_program();
+        let mut interner = parser.into_interner();
+        let mut checker = Checker::new(&interner);
+        let mut symbols = SymbolTable::new();
+        let _ = checker.check(&mut program, &mut symbols);
+        
+        let id_count = interner.intern("count");
+        let mut compiler = XCXCompiler::new();
+        let (main_chunk, constants, functions) = compiler.compile(&program, &mut interner);
+        let idx = compiler.get_global_idx(id_count);
+        
+        let vm = Arc::new(VM::new());
+        let ctx = SharedContext { constants, functions };
+        vm.clone().run(main_chunk, ctx);
+        assert_int(&vm, idx, 25, "Primes up to 100 should be 25");
     }
 }

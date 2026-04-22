@@ -1,26 +1,47 @@
-//==compiler/parser.md==\\
-# XCX Parser — v2.2
+# XCX Parser — Documentation
 
-The XCX Parser transforms the token stream into a high-level Abstract Syntax Tree (AST).
+> **File:** `src/parser/pratt.rs`  
+> **Technique:** Pratt Parser (Top-Down Operator Precedence)
 
-## Architecture: Pratt Parsing
+---
 
-XCX uses a **Pratt Parser** (Top-Down Operator Precedence).
+## Table of Contents
 
-- **File**: `src/parser/pratt.rs`
-- **Lookahead**: One token (`current` + `peek`), advanced manually with `advance()`.
-- **Error Recovery**: On syntax error, `synchronize()` skips tokens until the next semicolon or a known statement-starting keyword (`func`, `fiber`, `if`, `for`, `const`, `return`, `>!`, etc.).
+1. [Overview](#overview)
+2. [Precedence Levels](#precedence-levels)
+3. [Instruction Dispatch](#instruction-dispatch)
+4. [Function Definition Styles](#function-definition-styles)
+5. [Fiber Instructions](#fiber-instructions)
+6. [Expression Parsing](#expression-parsing)
+7. [AST Nodes — Expr](#ast-nodes--expr)
+8. [AST Nodes — Stmt](#ast-nodes--stmt)
+9. [Type System](#type-system)
+10. [Expr Stmt Post-processing](#expr-stmt-post-processing)
 
-The `Parser` struct borrows the source string for the lifetime `'a`, and `Scanner<'a>` is parameterised by the same lifetime, reflecting the byte-slice-based scanner.
+---
 
-### Precedence Levels (lowest → highest)
+## Overview
+
+The XCX Parser uses the **Pratt** algorithm (Top-Down Operator Precedence).
+
+- **File:** `src/parser/pratt.rs`
+- **Lookahead:** One token (`current` + `peek`), manual advancement via `advance()`
+- **Error Recovery:** `synchronize()` skips tokens until the next semicolon or a keyword starting a statement
+
+The `Parser` struct borrows the source string for lifetime `'a`, and the `Scanner<'a>` is parameterized with the same lifetime.
+
+---
+
+## Precedence Levels
+
+From lowest to highest:
 
 | Level | Operators |
 |---|---|
 | `Lowest` | — |
 | `Lambda` | `->` |
 | `Assignment` | `=` |
-| `LogicalOr` | `OR`, `\|\|` |
+| `LogicalOr` | `OR`, `||` |
 | `LogicalAnd` | `AND`, `&&` |
 | `Equals` | `==`, `!=` |
 | `LessGreater` | `>`, `<`, `>=`, `<=`, `HAS` |
@@ -29,190 +50,326 @@ The `Parser` struct borrows the source string for the lifetime `'a`, and `Scanne
 | `Product` | `*`, `/`, `%` |
 | `Power` | `^` |
 | `Prefix` | `-x` |
+| `Concatenation` | `::` |
 | `Call` | `.`, `[` |
+| `AsPrec` | `as` |
 
-## Statement Dispatch
+---
 
-`parse_statement_internal()` dispatches on the current token:
+## Instruction Dispatch
 
-- **Type keywords** (`i`, `f`, `s`, `b`, `array`, `set`, `map`, `date`, `table`, `json`) → `parse_var_decl()`, or `parse_assignment()` if followed by `=`
-- **`const`** → `parse_var_decl()` with `is_const = true`
-- **`var`** (identifier) → type-inferred variable declaration
-- **`>!`** → `parse_print_stmt()`
-- **`>?`** → `parse_input_stmt()`
-- **`halt`** → `parse_halt_stmt()`
-- **`if`** → `parse_if_statement()`
-- **`while`** → `parse_while_statement()`
-- **`for`** → `parse_for_statement()`
-- **`break`** / **`continue`** → `parse_break_statement()` / `parse_continue_statement()`
-- **`func`** → `parse_func_def()`
-- **`fiber`** → `parse_fiber_statement()` (dispatches to def or decl based on peek)
-- **`return`** → `parse_return_stmt()`
-- **`yield`** → `parse_yield_stmt()` (handles `yield expr`, `yield from expr`, and `yield;`)
-- **`@wait`** → `parse_wait_stmt()`
-- **`serve`** → `parse_serve_stmt()`
-- **`net`** → `parse_net_stmt()`
-- **`include`** → `parse_include_stmt()`
-- **Identifier + `=`** → `parse_assignment()`
-- **Identifier + `(`** → `parse_func_call_stmt()`
-- **Anything else** → `parse_expr_stmt()`
+`parse_statement_internal()` dispatches based on the current token:
+
+| Token | Parser |
+|---|---|
+| Type Keywords (`i`, `f`, `s`, `b`, `array`, ...) | `parse_var_decl()` or `parse_assignment()` |
+| `const` | `parse_var_decl()` with `is_const = true` |
+| `var` (identifier) | Variable declaration with type inference |
+| `>!` | `parse_print_stmt()` |
+| `>?` | `parse_input_stmt()` |
+| `halt` | `parse_halt_stmt()` |
+| `if` | `parse_if_statement()` |
+| `while` | `parse_while_statement()` |
+| `for` | `parse_for_statement()` |
+| `break` / `continue` | `parse_break_statement()` / `parse_continue_statement()` |
+| `func` | `parse_func_def()` |
+| `fiber` | `parse_fiber_statement()` |
+| `return` | `parse_return_stmt()` |
+| `yield` | `parse_yield_stmt()` |
+| `@wait` | `parse_wait_stmt()` |
+| `serve` | `parse_serve_stmt()` |
+| `net` | `parse_net_stmt()` |
+| `include` | `parse_include_stmt()` |
+| Identifier + `=` | `parse_assignment()` |
+| Identifier + `(` | `parse_func_call_stmt()` |
+
+---
 
 ## Function Definition Styles
 
-XCX supports two syntactically different styles for defining functions:
+XCX supports two syntactically different function definition styles:
 
-**Brace style** (C-like):
+### Curly Brace Style (C-like)
+
 ```xcx
 func name(i: x, s: y -> i) {
     return x + 1;
 }
 ```
 
-**XCX style** (keyword block):
+### XCX Style (Keyword block)
+
 ```xcx
 func:i: name(i: x, s: y) do;
     return x + 1;
 end;
 ```
 
-Both produce identical `StmtKind::FunctionDef` AST nodes. The return type in brace style is declared with `-> type` inside the parameter list or after `)`.
+Both styles produce identical `StmtKind::FunctionDef` AST nodes. The return type in the curly brace style is declared via `-> type` inside the parameter list or after the `)`.
 
-## Fiber Statements
+---
 
-`parse_fiber_statement()` looks at `peek` to decide:
+## Fiber Instructions
+
+`parse_fiber_statement()` checks the `peek` to decide:
 - `peek == Colon` → `parse_fiber_decl()` (instantiation: `fiber:T: varname = fiberDef(args);`)
 - otherwise → `parse_fiber_def()` (definition: `fiber name(params) { body }`)
 
-`parse_fiber_decl()` also handles the case where, after parsing the type and name, the current token is `(` — in that case it pivots to `finish_fiber_def()` (a definition with a leading `fiber:` type annotation).
+`parse_fiber_decl()` also handles the case where after parsing the type and name, the current token is `(` — in which case it pivots to `finish_fiber_def()`.
 
-## Key Constructs Parsed
+### Fiber Definition
 
-- **Variable declarations**: `i: name = expr;`, `const s: NAME = expr;`, `var name = expr;`
-- **Control flow**: `if (cond) then; ... elseif (cond) then; ... else; ... end;`
-- **While loop**: `while (cond) do; ... end;`
-- **For loop**: `for x in expr do; ... end;` and `for x in start to end @step n do; ... end;`
-- **Functions**: `func` (two styles, see above)
-- **Fibers**: `fiber name(params) { body }` and `fiber:T: varname = fiberName(args);`
-- **Yield**: `yield expr;`, `yield from expr;`, `yield;`
-- **HTTP**: `serve: name { port=..., routes=... };`, `net.get(url)`, `net.request { ... } as resp;`, `net.respond(status, body);`
-- **Collections**: Array `[a, b, c]`, Set `set:N { 1,,10 }`, Map `[k :: v, ...]`, Table `table { columns=[...] rows=[...] }`
-- **Raw blocks**: `<<<...>>>` for inline JSON/strings
-- **Include**: `include "path";` or `include "path" as alias;`
-- **I/O**: `>! expr;` (print), `>? varname;` (input)
-- **Halt**: `halt.alert >! msg;`, `halt.error >! msg;`, `halt.fatal >! msg;`
-- **Wait**: `@wait(ms);` or `@wait ms;`
-- **Date literals**: `date("2024-01-01")` or `date("01/01/2024", "DD/MM/YYYY")`
-
-## Expression Parsing
-
-`parse_expression(precedence)` calls `parse_prefix()` for the left-hand side, then loops calling `parse_infix(left)` while the peek token's precedence exceeds the current minimum.
-
-Key prefix parsers:
-- **Identifiers**: If followed by `(`, parsed as a `FunctionCall`; otherwise as an `Identifier`.
-- **Literals**: `IntLiteral`, `FloatLiteral`, `StringLiteral`, `True`, `False`
-- **Unary minus**: Parsed as `Binary { left: IntLiteral(0), op: Minus, right }` (no separate `Unary::Neg`)
-- **`not` / `!`**: `Unary { op: Not/Bang, right }`
-- **`(`...`)` groups**: Single expression → unwrapped; multiple comma-separated → `Tuple`
-- **`[`...`]`**: If first element followed by `::`, parsed as a `MapLiteral`; otherwise `ArrayLiteral`
-- **`{`...`}`**: Parsed as `ArrayOrSetLiteral` (type resolved at semantic or compile time)
-- **`set:N { }` etc.**: Explicit `SetLiteral` with known `SetType`
-- **`map { schema=[...] data=[...] }`**: Explicit `MapLiteral`
-- **`table { columns=[...] rows=[...] }`**: `TableLiteral`
-- **`random.choice from expr`**: `RandomChoice`
-- **`date(...)`**: `DateLiteral`
-- **`net.get/post/put/delete/patch(...)` etc.**: `NetCall` or `NetRespond`
-- **`<<<...>>>`**: `RawBlock`
-- **`.terminal!cmd`**: `TerminalCommand`
-
-Key infix parsers:
-- **`.`**: `parse_dot_infix` — produces `MethodCall` if followed by `(`, else `MemberAccess`; also handles `.[key]` index access
-- **`[`**: `parse_index_infix` → `Index`
-- **`->`**: `parse_lambda_infix` → `Lambda`
-- **All binary operators**: `Binary { left, op, right }`
-
-## `parse_expr_stmt()` Post-Processing
-
-After parsing a full expression statement, `parse_expr_stmt()` checks if the result is a `MethodCall`:
-- Method name `bind` with 2 args and second arg is `Identifier` → rewrite as `StmtKind::JsonBind`
-- Method name `inject` with 2 args → rewrite as `StmtKind::JsonInject`
-
-This allows the sugar syntax `json.bind("path", target);` and `json.inject(mapping, table);` at the statement level.
-
-## Expander (`src/parser/expander.rs`)
-
-The Expander runs **after** parsing, **before** semantic analysis. It is a separate tree-rewriting pass.
-
-### Responsibilities
-
-**Include resolution**: `include "file.xcx";` is replaced by the inlined AST of that file. Circular dependencies are detected via `visiting_files: HashSet<PathBuf>`. Files are deduplicated via `included_files: HashSet<PathBuf>` (each file included only once unless aliased).
-
-**Alias prefixing**: `include "math.xcx" as math;` causes all top-level names from that file to be renamed to `math.name`. Call sites (`math.sin(x)`) are rewritten from `MethodCall` to `FunctionCall { name: "math.sin" }` by `expand_expr_inplace`. The `prefix_program()` / `prefix_stmt_impl()` / `prefix_expr_impl()` functions walk the entire sub-AST renaming all references to top-level symbols.
-
-**Fiber name prefixing**: `FiberDecl::fiber_name` references are also prefixed so that instantiations of renamed fibers resolve correctly after prefixing.
-
-**YieldFrom prefixing**: `StmtKind::YieldFrom` expressions are traversed so that fiber constructor calls inside `yield from` are also renamed.
-
-**Protected names** (never prefixed): `json`, `date`, `store`, `halt`, `terminal`, `net`, `env`, `crypto`, `EMPTY`, `math`, `random`, `i`, `f`, `s`, `b`, `from`, `main`.
-
-**Include path search order**:
-1. Relative to the current file's directory
-2. In the `lib/` directory (relative to CWD, then walking up from the executable's path)
-
-## AST Definitions (`src/parser/ast.rs`)
-
-### `Expr` — Expression nodes
-
-| Variant | Description |
-|---|---|
-| `IntLiteral(i64)` | Integer constant |
-| `FloatLiteral(f64)` | Float constant |
-| `StringLiteral(StringId)` | Interned string |
-| `BoolLiteral(bool)` | `true` / `false` |
-| `Identifier(StringId)` | Variable or function name |
-| `Binary { left, op, right }` | Binary operation |
-| `Unary { op, right }` | Unary operation (`not`, `!`) |
-| `FunctionCall { name, args }` | Function call by interned name |
-| `MethodCall { receiver, method, args }` | Dot-call on a value |
-| `MemberAccess { receiver, member }` | Dot-access without call |
-| `Index { receiver, index }` | Bracket index `a[i]` |
-| `Lambda { params, return_type, body }` | Arrow lambda `x -> expr` |
-| `ArrayLiteral { elements }` | Explicit `[a, b, c]` |
-| `ArrayOrSetLiteral { elements }` | Ambiguous `{a, b, c}` — resolved later |
-| `SetLiteral { set_type, elements, range }` | Typed set with optional range |
-| `MapLiteral { key_type, value_type, elements }` | Map literal |
-| `TableLiteral { columns, rows }` | Table literal |
-| `DateLiteral { date_string, format }` | `date("2024-01-01")` |
-| `Tuple(Vec<Expr>)` | Parenthesised comma-separated list |
-| `NetCall { method, url, body }` | HTTP call expression |
-| `NetRespond { status, body, headers }` | HTTP respond expression |
-| `RawBlock(StringId)` | `<<<...>>>` raw content |
-| `TerminalCommand(cmd, arg)` | `.terminal !cmd` |
-| `RandomChoice { set }` | `random.choice from set` |
-
-### `Stmt` — Statement nodes
-
-Key variants: `VarDecl`, `Assign`, `Print`, `Input`, `If`, `While`, `For`, `Break`, `Continue`, `FunctionDef`, `FiberDef`, `FiberDecl`, `Return`, `Yield`, `YieldFrom`, `YieldVoid`, `Include`, `Serve`, `NetRequestStmt`, `JsonBind`, `JsonInject`, `Halt`, `Wait`, `ExprStmt`, `FunctionCallStmt`.
-
-### `Type` — Type system
-
-`Int`, `Float`, `String`, `Bool`, `Date`, `Json`, `Array(Box<Type>)`, `Set(SetType)`, `Map(Box<Type>, Box<Type>)`, `Table(Vec<ColumnDef>)`, `Fiber(Option<Box<Type>>)`, `Builtin(StringId)`, `Unknown`.
-
-`SetType` variants: `N` (Natural), `Z` (Integer), `Q` (Rational/Float), `S` (String), `C` (Char/String), `B` (Boolean).
-
-### `ForIterType`
-
-`Range` (numeric `start to end`), `Array`, `Set`, `Fiber` — set by the type checker and used by the compiler to emit the correct loop pattern.
-
-### `ColumnDef`
-
-```rust
-pub struct ColumnDef {
-    pub name:    StringId,
-    pub ty:      Type,
-    pub is_auto: bool,    // @auto columns are auto-incremented on insert
+```xcx
+fiber myFiber(i: x) {
+    yield x;
+    yield x + 1;
 }
 ```
 
-## String Interner
+### Fiber Instantiation
 
-All string values (identifiers, string literals, method names) are interned via `Interner` into `StringId (u32)`. The interner is created in the parser and passed through all subsequent phases. This means the checker, compiler, and VM all use numeric IDs for name comparisons instead of `String` comparisons.
+```xcx
+fiber:i: f = myFiber(10);
+```
+
+### Yield
+
+```xcx
+yield expr;       // yield with value
+yield from expr;  // delegate to another fiber
+yield;            // void yield
+```
+
+---
+
+## Expression Parsing
+
+`parse_expression(precedence)` calls `parse_prefix()` for the left side, then loops calling `parse_infix(left)` as long as the peek token's precedence exceeds the current minimum.
+
+### Prefix Parsers (Selection)
+
+| Expression | AST Result |
+|---|---|
+| Identifier | `Identifier` or `FunctionCall` (if followed by `(`) |
+| `IntLiteral`, `FloatLiteral`, `StringLiteral` | Corresponding literal node |
+| `-x` (unary minus) | `Binary { left: IntLiteral(0), op: Minus, right }` |
+| `not` / `!` | `Unary { op: Not/Bang, right }` |
+| `(expr)` | Unwrapped expression or `Tuple` (multiple el.) |
+| `[a, b, c]` | `ArrayLiteral` or `MapLiteral` (if containing `::`) |
+| `{a, b, c}` | `ArrayOrSetLiteral` (type resolved semantically) |
+| `set:N { 1,,10 }` | `SetLiteral` with type and optional range |
+| `table { ... }` | `TableLiteral` |
+| `random.choice from expr` | `RandomChoice` |
+| `random.int(min, max)` | `RandomInt` |
+| `random.float(min, max)` | `RandomFloat` |
+| `date("2024-01-01")` | `DateLiteral` |
+| `net.get/post/...(url)` | `NetCall` |
+| `net.respond(status, body)` | `NetRespond` |
+| `<<<...>>>` | `RawBlock` |
+| `.terminal!cmd` | `TerminalCommand` |
+| `#tag` | `Tag` |
+
+### Infix Parsers (Selection)
+
+| Operator | AST Result |
+|---|---|
+| `.method(args)` | `MethodCall` |
+| `.member` | `MemberAccess` |
+| `.[key]` | `Index` |
+| `[index]` | `Index` |
+| `->` | `Lambda` |
+| `as name` | `As` |
+| All binary operators | `Binary { left, op, right }` |
+
+---
+
+## AST Nodes — Expr
+
+Defined in `src/parser/ast.rs` as the `ExprKind` enum:
+
+```
+ExprKind
+├── Literals
+│   ├── IntLiteral(i64)
+│   ├── FloatLiteral(f64)
+│   ├── StringLiteral(StringId)
+│   ├── BoolLiteral(bool)
+│   └── DateLiteral { date_string, format }
+├── Identifiers and Access
+│   ├── Identifier(StringId)
+│   ├── MemberAccess { receiver, member }
+│   └── Index { receiver, index }
+├── Operations
+│   ├── Binary { left, op, right }
+│   └── Unary { op, right }
+├── Calls
+│   ├── FunctionCall { name, args }
+│   ├── MethodCall { receiver, method, args, wait_after }
+│   └── Lambda { params, return_type, body }
+├── Collections
+│   ├── ArrayLiteral { elements }
+│   ├── ArrayOrSetLiteral { elements }
+│   ├── SetLiteral { set_type, elements, range }
+│   ├── MapLiteral { key_type, value_type, elements }
+│   └── TableLiteral { columns, rows }
+├── Networking
+│   ├── NetCall { method, url, body }
+│   └── NetRespond { status, body, headers }
+├── Fiber
+│   └── Yield(expr)
+├── Randomness
+│   ├── RandomChoice { set }
+│   ├── RandomInt { min, max, step }
+│   └── RandomFloat { min, max, step }
+└── Other
+    ├── RawBlock(StringId)
+    ├── TerminalCommand(cmd, args)
+    ├── Tuple(Vec<Expr>)
+    ├── As { expr, name }
+    └── Tag(StringId)
+```
+
+---
+
+## AST Nodes — Stmt
+
+Key `StmtKind` variants:
+
+| Variant | Description |
+|---|---|
+| `VarDecl { is_const, ty, name, value }` | Variable declaration |
+| `Assign { name, value }` | Assignment |
+| `Print(expr)` | `>! expr;` statement |
+| `Input(name, ty)` | `>? var;` statement |
+| `If { condition, then_branch, else_ifs, else_branch }` | Conditional statement |
+| `While { condition, body }` | While loop |
+| `For { var_name, start, end, step, body, iter_type }` | For loop |
+| `Break` / `Continue` | Loop control |
+| `FunctionDef { name, params, return_type, body }` | Function definition |
+| `FiberDef { name, params, return_type, body }` | Fiber definition |
+| `FiberDecl { inner_type, name, fiber_name, args }` | Fiber instantiation |
+| `Return(Option<Expr>)` | Return statement |
+| `Yield(expr)` | Yield statement |
+| `YieldFrom(expr)` | `yield from` delegation |
+| `YieldVoid` | `yield;` without value |
+| `Include { path, alias }` | Include directive |
+| `Serve { name, port, host, workers, routes }` | HTTP server |
+| `NetRequestStmt { ... }` | `net.request { }` statement |
+| `JsonBind { json, path, target }` | `json.bind(...)` assignment |
+| `JsonInject { json, mapping, table }` | `json.inject(...)` |
+| `Halt { level, message }` | Halt with level |
+| `Wait(expr)` | `@wait(ms)` |
+
+---
+
+## Type System
+
+`Type` enum in `src/parser/ast.rs`:
+
+```
+Type
+├── Int          — 48-bit integer (NaN-boxed)
+├── Float        — 64-bit floating-point
+├── String       — UTF-8
+├── Bool         — true/false
+├── Date         — ms timestamp
+├── Json         — any JSON value
+├── Array(Box<Type>)
+├── Set(SetType) — N/Q/Z/S/C/B
+├── Map(Box<Type>, Box<Type>)
+├── Table(Vec<ColumnDef>)
+├── Database
+├── Fiber(Option<Box<Type>>)  — None = void
+├── Builtin(StringId)          — json, date, store, etc.
+└── Unknown                    — acts as a wildcard
+```
+
+`SetType` variants: `N` (Natural), `Z` (Integer), `Q` (Rational/Float), `S` (String), `C` (Char/String), `B` (Boolean).
+
+### ColumnDef
+
+```rust
+pub struct ColumnDef {
+    pub name:       StringId,
+    pub ty:         Type,
+    pub attributes: Vec<ColumnAttribute>,
+}
+```
+
+Column attributes: `Auto` (`@auto`), `PrimaryKey` (`@pk`), `Unique` (`@unique`), `Optional` (`@optional`), `Default(Expr)` (`@default(val)`), `ForeignKey(table, col)` (`@fk(Table.col)`).
+
+### ForIterType
+
+Set by the type checker during semantic analysis:
+
+| Variant | Description |
+|---|---|
+| `Range` | Numeric `start to end` |
+| `Array` | Iteration over array |
+| `Set` | Iteration over set |
+| `Fiber` | Iteration over fiber |
+
+---
+
+## Expr Stmt Post-processing
+
+After parsing a full statement expression, `parse_expr_stmt()` checks if the result is a `MethodCall`:
+
+- Method name `bind` with 2 arguments, where the second is an `Identifier` → rewritten as `StmtKind::JsonBind`
+- Method name `inject` with 2 arguments → rewritten as `StmtKind::JsonInject`
+
+This enables the syntactic sugar `json.bind("path", target);` and `json.inject(mapping, table);` at the statement level.
+
+---
+
+## Language Constructs (Syntax)
+
+```xcx
+--- Variables
+i: age = 25;
+const s: NAME = "Alice";
+var x = 42;
+
+--- Flow Control
+if (cond) then;
+    ...
+elseif (cond2) then;
+    ...
+else;
+    ...
+end;
+
+while (cond) do;
+    ...
+end;
+
+for x in 1 to 10 do;
+    ...
+end;
+
+for item in myArray do;
+    ...
+end;
+
+--- Functions
+func:i: add(i: a, i: b) do;
+    return a + b;
+end;
+
+--- HTTP
+serve: myServer {
+    port = 8080,
+    routes = [["GET /api" :: handler]]
+};
+
+net.get("https://api.example.com") as resp;
+
+--- Collections
+array:i arrOfInts = [1, 2, 3];
+set:N mySet = set:N { 1,,100 };
+map:s<->i scores = [s::v :: ["Alice" :: 100]];
+
+--- JSON
+json: data = <<<{ "name": "Alice" }>>>;
+data.bind("/name", nameVar);
+```

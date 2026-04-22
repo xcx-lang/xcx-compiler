@@ -16,6 +16,7 @@ use crate::backend::vm::VM;
 use crate::diagnostic::Reporter;
 
 fn main() {
+    crate::backend::vm::preserve_jit_helpers_dummy();
     ctrlc::set_handler(move || {
         crate::backend::vm::SHUTDOWN.store(true, std::sync::atomic::Ordering::SeqCst);
         println!("\n[XCX] Shutdown signal received. Cleaning up...");
@@ -28,10 +29,19 @@ fn main() {
     }
 
     let first_arg = &args[1];
+    if first_arg == "--help" || first_arg == "-h" || first_arg == "help" {
+        println!("Usage:");
+        println!("  xcx                Start REPL");
+        println!("  xcx <file.xcx>     Run file");
+        println!("  xcx --version      Show version");
+        println!("  xcx --help         Show help");
+        println!("\nInside REPL:");
+        println!("  !help              Show REPL commands");
+        return;
+    }
+
     if first_arg == "--version" || first_arg == "version" {
-        println!("XCX Compiler v2.2");
-        println!("Language Version: XCX 2.2");
-        println!("Author: Heisenberg");
+        println!("xcx 3.0 ({}/{})", std::env::consts::OS, std::env::consts::ARCH);
         return;
     }
 
@@ -75,8 +85,12 @@ fn run_file(filename: &str) {
         .parent()
         .unwrap_or(std::path::Path::new("."));
 
+    let start_time = std::time::Instant::now();
     let mut parser = Parser::new(&source);
     let program_raw = parser.parse_program();
+    if parser.has_error {
+        return;
+    }
     let mut interner = parser.into_interner();
 
     let mut expander = crate::parser::expander::Expander::new(&mut interner);
@@ -103,40 +117,17 @@ fn run_file(filename: &str) {
     if !errors.is_empty() {
         let reporter = Reporter::new(&source);
         for err in &errors {
-            let msg = match &err.kind {
-                crate::sema::checker::TypeErrorKind::UndefinedVariable(name) =>
-                    format!("Undefined variable: {}", name),
-                crate::sema::checker::TypeErrorKind::RedefinedVariable(name) =>
-                    format!("Redefined variable: {}", name),
-                crate::sema::checker::TypeErrorKind::TypeMismatch { expected, actual } =>
-                    format!("Type mismatch: expected {:?}, got {:?} [line={} col={}]",
-                        expected, actual, err.span.line, err.span.col),
-                crate::sema::checker::TypeErrorKind::InvalidBinaryOp { op, left, right } =>
-                    format!("Invalid operation {:?} between {:?} and {:?}", op, left, right),
-                crate::sema::checker::TypeErrorKind::BreakOutsideLoop =>
-                    "Break statement outside of loop".to_string(),
-                crate::sema::checker::TypeErrorKind::ContinueOutsideLoop =>
-                    "Continue statement outside of loop".to_string(),
-                crate::sema::checker::TypeErrorKind::ConstReassignment(name) =>
-                    format!("Cannot reassign to constant variable: {}", name),
-                crate::sema::checker::TypeErrorKind::YieldOutsideFiber =>
-                    "[S208] 'yield' used outside a fiber body".to_string(),
-                crate::sema::checker::TypeErrorKind::FiberTypeMismatch =>
-                    "[S209] Cannot use 'yield expr;' inside a void fiber — use 'yield;' instead".to_string(),
-                crate::sema::checker::TypeErrorKind::ReturnTypeMismatchInFiber =>
-                    "[S210] Typed fiber requires 'return expr;' not plain 'return;'".to_string(),
-                crate::sema::checker::TypeErrorKind::WherePredicateNameCollision { var_name, column_name } =>
-                    format!("S301: variable name '{}' conflicts with column '{}' in .where() predicate — rename the local variable",
-                        var_name, column_name),
-                crate::sema::checker::TypeErrorKind::Other(msg) => msg.clone(),
-            };
-            reporter.error(err.span.line, err.span.col, err.span.len, &msg);
+            reporter.error(err.span.line, err.span.col, err.span.len, &err.kind.to_diagnostic_message());
         }
+        let duration = start_time.elapsed();
+        println!("\n[XCX] Semantic analysis failed in {:?}. Found {} error(s).", duration, errors.len());
         return;
     }
 
     let mut compiler = Compiler::new();
     let (main_chunk, constants, functions) = compiler.compile(&program, &mut interner);
+    let duration = start_time.elapsed();
+    println!("[XCX] Compiled successfully in {:?}.", duration);
 
     let ctx = crate::backend::vm::SharedContext {
         constants,

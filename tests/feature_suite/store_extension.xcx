@@ -1,0 +1,55 @@
+--- Extension Test for Store Module
+
+
+func main() {
+    --- Create test directory
+    s: test_dir = "test_store_ext";
+    store.mkdir(test_dir);
+    if (NOT store.isDir(test_dir)) then;
+        >! "FAIL: mkdir or isDir failed";
+        halt.fatal >! "FAIL: mkdir or isDir failed";
+    end;
+
+    --- Write a file
+    s: test_file = "test_store_ext/dummy.txt";
+    store.write(test_file, "hello world");
+    
+    --- Check size
+    i: sz = store.size(test_file);
+    if (sz != 11) then;
+        >! "FAIL: size mismatch, expected 11, got " + s(sz);
+        halt.fatal >! "FAIL: size mismatch";
+    end;
+
+    --- List components
+    array:s: items = store.list(test_dir);
+    if (items.size() == 0) then;
+        >! "FAIL: list empty";
+        halt.fatal >! "FAIL: list empty";
+    end;
+
+    --- Glob test
+    array:s: results = store.glob("test_store_ext/*.txt");
+    if (results.size() == 0) then;
+        >! "FAIL: glob no results";
+        halt.fatal >! "FAIL: glob no results";
+    end;
+
+    --- Zip test
+    s: zip_name = "test.zip";
+    store.zip(test_dir, zip_name);
+    if (NOT store.exists(zip_name)) then;
+        >! "FAIL: zip failed";
+        halt.fatal >! "FAIL: zip failed";
+    end;
+
+    --- Unzip test
+    s: unzip_dir = "test_unzipped";
+    store.unzip(zip_name, unzip_dir);
+    if (NOT store.isDir(unzip_dir)) then;
+        >! "FAIL: unzip failed";
+        halt.fatal >! "FAIL: unzip failed";
+    end;
+
+    >! "PASS: Store extension verified";
+};

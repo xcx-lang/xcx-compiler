@@ -1,0 +1,5 @@
+i: age;
+>! "your age";
+>? age;
+>! "your age is " + age;
+

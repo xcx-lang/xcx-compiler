@@ -1,0 +1,39 @@
+--- Main runner - executes all SQL tests
+
+>! "";
+>! "========================================";
+>! "   XCX SQL TEST SUITE";
+>! "========================================";
+>! "";
+
+i: passed = 0;
+i: failed = 0;
+
+array:s: test_files {
+    "sql-tests/sql_basic.xcx",
+    "sql-tests/sql_exec.xcx",
+    "sql-tests/sql_queryraw.xcx",
+    "sql-tests/sql_transactions.xcx",
+    "sql-tests/sql_schema.xcx",
+    "sql-tests/sql_tojson.xcx",
+    "sql-tests/sql_where_advanced.xcx"
+};
+
+i: i = 0;
+while (i < test_files.size()) do;
+    s: file = test_files.get(i);
+    >! "--- Running: " + file;
+    b: result = .terminal !run file;
+    if (result) then;
+        passed = passed + 1;
+    els;
+        failed = failed + 1;
+        >! "ERROR in: " + file;
+    end;
+    i = i + 1;
+end;
+
+>! "";
+>! "========================================";
+>! "RESULTS: " + s(passed) + " passed / " + s(failed) + " failed";
+>! "========================================";

@@ -1,0 +1,74 @@
+database: db {
+    engine = "sqlite",
+    path   = "test_where.db"
+};
+
+table: employees {
+    columns = [
+        id         :: i @auto @pk,
+        name       :: s,
+        department :: s,
+        salary     :: i,
+        active     :: i
+    ]
+    rows = [EMPTY]
+};
+
+fiber run(-> b) {
+    yield db.sync(employees);
+    yield db.truncate(employees);
+
+    yield db.insert(employees, "Alice",   "IT",  8000, 1);
+    yield db.insert(employees, "Bob",     "HR",  5000, 1);
+    yield db.insert(employees, "Charlie", "IT",  7000, 0);
+    yield db.insert(employees, "Diana",   "IT",  9000, 1);
+    yield db.insert(employees, "Eve",     "HR",  6000, 0);
+
+    table: it_dept = yield db.fetch(employees).where(department == "IT");
+    if (it_dept.count() != 3) then;
+        >! "FAIL: IT should have 3, has " + s(it_dept.count());
+        return false;
+    end;
+    >! "PASS: WHERE department == 'IT' = " + s(it_dept.count());
+
+    table: high_sal = yield db.fetch(employees).where(salary >= 7000);
+    if (high_sal.count() != 3) then;
+        >! "FAIL: salary >= 7000 should return 3, got " + s(high_sal.count());
+        return false;
+    end;
+    >! "PASS: WHERE salary >= 7000 = " + s(high_sal.count());
+
+    table: active_it = yield db.fetch(employees)
+        .where(department == "IT")
+        .where(active == 1);
+    if (active_it.count() != 2) then;
+        >! "FAIL: active IT should be 2, are " + s(active_it.count());
+        return false;
+    end;
+    >! "PASS: WHERE IT AND active = " + s(active_it.count());
+
+    table: not_hr = yield db.fetch(employees).where(department != "HR");
+    if (not_hr.count() != 3) then;
+        >! "FAIL: non-HR should be 3, is " + s(not_hr.count());
+        return false;
+    end;
+    >! "PASS: WHERE department != 'HR' = " + s(not_hr.count());
+
+    i: min_sal = 6000;
+    table: mid_sal = yield db.fetch(employees).where(salary > min_sal);
+    if (mid_sal.count() != 3) then;
+        >! "FAIL: salary > 6000 (variable) should return 3, got " + s(mid_sal.count());
+        return false;
+    end;
+    >! "PASS: WHERE salary > min_sal (variable) = " + s(mid_sal.count());
+
+    return true;
+};
+
+fiber:b: f = run();
+b: ok = f.next();
+if (ok) then;
+    >! "=== sql_where_advanced: ALL TESTS PASSED ===";
+els;
+    >! "=== sql_where_advanced: ERROR ===";
+end;

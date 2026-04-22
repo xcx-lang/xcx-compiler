@@ -1,0 +1,29 @@
+i: count = 10;
+s: name = "Original";
+b: active = true;
+
+json: data = json.parse("{\"count\": 20}");
+
+--- Bind existing fields
+data.bind("count", count);
+data.bind("missing", name);
+data.bind("null", active);
+
+--- Verify results
+if (count == 20) then;
+    >! "Test 1 Passed: count updated to 20";
+else;
+    >! "Test 1 Failed: count is " + s(count);
+end;
+
+if (name == "Original") then;
+    >! "Test 2 Passed: name preserved (not overwritten by missing path)";
+else;
+    >! "Test 2 Failed: name overwritten with " + name;
+end;
+
+if (active == true) then;
+    >! "Test 3 Passed: active preserved (not overwritten by null/false)";
+else;
+    >! "Test 3 Failed: active overwritten with " + s(active);
+end;
