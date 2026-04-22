@@ -1,7 +1,5 @@
 # Rust
 /target/
-# Cargo.lock is typically kept for applications/binaries to ensure reproducible builds.
-# If you prefer to exclude it, uncomment the line below:
 # Cargo.lock
 
 # XCX Releases
