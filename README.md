@@ -109,21 +109,23 @@ Benchmarks run on Windows 11, Ryzen 5 5600X, 16GB RAM. XCX uses a register-based
 > 
 > The goal of this section is **transparency**, not competition.
 
-| Language | Loop (1B) | Fibonacci (30) | Sieve (100k) | JSON (1k × 100) |
+| Language | Loop (100M) | Fibonacci (30) | Sieve | JSON |
 |---|---|---|---|---|
-| C (O2) | 215ms | 1ms | <1ms | N/A |
-| C++ (O2) | 219ms | 1ms | <1ms | N/A |
-| Go | 216ms | 3.2ms | 99.6ms | 64ms |
-| Java | 238ms | 2.5ms | 2.6ms | N/A |
-| Rust (O3) | 294ms | 1.8ms | 201ms | N/A |
-| Nim | 319ms | 16.6ms | <1ms | 60.9ms |
-| Node.js | 356ms | 6.9ms | 2.5ms | 9.1ms |
-| **XCX 3.0** | **453ms** | **60ms** | **5ms** | **119ms** |
-| LuaJIT | 643ms | 9.2ms | 1.1ms | N/A |
-| V | 653ms | 3ms | 1ms | N/A |
-| PHP | 6846ms | 69.6ms | 3.8ms | 11.2ms |
-| R | 917ms | 550.9ms | 8.8ms | N/A |
-| Python | 27482ms | 110ms | 4.1ms | 41.9ms |
+| Rust | 29.52ms | 1.79ms | 0.12ms | N/A |
+| Java | 34.1ms | 2.2ms | 2.1ms | N/A |
+| Go | 84.42ms | 3.27ms | 0.10ms | 60.46ms |
+| Nim | 89ms | 18ms | 0.2ms | 58.9ms |
+| C++ | 84.76ms | 1.03ms | 0.09ms | N/A |
+| C | 85.09ms | 1.01ms | 0.10ms | N/A |
+| V | 89.45ms | 1.32ms | 0.16ms | N/A |
+| Crystal | 90.9ms | 2.96ms | 0.29ms | N/A |
+| Node.js | 358.89ms | 6.54ms | 2.28ms | 8.12ms |
+| LuaJIT | 378ms | 9.1ms | 0.8ms | N/A |
+| **XCX 3.0** | **521ms** | **60ms** | **5ms** | **118ms** |
+| PHP | 3219.35ms | 80.33ms | 4.21ms | 10.83ms |
+| Lua | 5766ms | 82.8ms | 7ms | N/A |
+| Python | 11094.20ms | 100.65ms | 3.72ms | 38.15ms |
+| R | 23327ms | 580ms | 3ms | N/A |
 
 XCX is not yet performance-competitive with compiled languages in general workloads.
 
