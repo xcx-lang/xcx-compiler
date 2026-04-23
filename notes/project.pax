@@ -1,0 +1,14 @@
+---
+PAX Project Configuration
+*---
+/
+    name        :: "notes",
+    version     :: "0.1.0",
+    author      :: "dev",
+    description :: "PAX project",
+    tags  :: [],
+    files :: [],
+    deps  :: [
+
+    ]
+/

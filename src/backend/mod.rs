@@ -722,14 +722,16 @@ impl FunctionCompiler {
                                 _ => false,
                             }
                         });
+                        let sub_bytecode = Arc::new(sub.bytecode);
                         ctx.functions.push(FunctionChunk {
-                            bytecode: Arc::new(sub.bytecode),
+                            has_terminal_ops: detect_terminal_ops(&sub_bytecode),
+                            bytecode: sub_bytecode,
                             spans: Arc::new(sub.spans),
                             is_fiber: false,
                             max_locals: sub.max_locals_used.max(sub.next_local),
                             has_loops,
                             jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
-        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                            call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                         });
                         
                         let f_val = Value::from_function(fid as u32);
@@ -941,14 +943,16 @@ impl FunctionCompiler {
                         _ => false,
                     }
                 });
+                let sub_bytecode2 = Arc::new(sub.bytecode);
                 ctx.functions.push(FunctionChunk {
-                    bytecode: Arc::new(sub.bytecode),
+                    has_terminal_ops: detect_terminal_ops(&sub_bytecode2),
+                    bytecode: sub_bytecode2,
                     spans: Arc::new(sub.spans),
                     is_fiber: false,
                     max_locals: sub.max_locals_used.max(sub.next_local),
                     has_loops,
                     jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
-        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 });
                 
                 let f_val = Value::from_function(fid as u32);
@@ -1749,14 +1753,16 @@ impl FunctionCompiler {
                         _ => false,
                     }
                 });
+                let fc_bytecode = Arc::new(fc.bytecode);
                 let chunk = FunctionChunk {
-                    bytecode: Arc::new(fc.bytecode),
+                    has_terminal_ops: detect_terminal_ops(&fc_bytecode),
+                    bytecode: fc_bytecode,
                     spans: Arc::new(fc.spans),
                     is_fiber: false,
                     max_locals: fc.max_locals_used.max(fc.next_local),
                     has_loops,
                     jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
-        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 };
                 let fid = ctx.func_indices.get(name).copied().unwrap_or(0);
                 ctx.functions[fid] = chunk;
@@ -1779,14 +1785,16 @@ impl FunctionCompiler {
                         _ => false,
                     }
                 });
+                let fc_bytecode2 = Arc::new(fc.bytecode);
                 let chunk = FunctionChunk {
-                    bytecode: Arc::new(fc.bytecode),
+                    has_terminal_ops: detect_terminal_ops(&fc_bytecode2),
+                    bytecode: fc_bytecode2,
                     spans: Arc::new(fc.spans),
                     is_fiber: true,
                     max_locals: fc.max_locals_used.max(fc.next_local),
                     has_loops,
                     jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
-        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 };
                 let fid = ctx.func_indices.get(name).copied().unwrap_or(0);
                 ctx.functions[fid] = chunk;
@@ -1929,6 +1937,24 @@ impl FunctionCompiler {
     }
 }
 
+fn detect_terminal_ops(bytecode: &[OpCode]) -> bool {
+    bytecode.iter().any(|op| matches!(op,
+        OpCode::TerminalClear
+        | OpCode::TerminalRaw
+        | OpCode::TerminalNormal
+        | OpCode::TerminalCursor { .. }
+        | OpCode::TerminalMove { .. }
+        | OpCode::TerminalWrite { .. }
+        | OpCode::TerminalExit
+        | OpCode::TerminalRun { .. }
+        | OpCode::InputKey { .. }
+        | OpCode::InputKeyWait { .. }
+        | OpCode::InputReady { .. }
+        | OpCode::Input { .. }
+        | OpCode::Print { .. }
+    ))
+}
+
 fn register_globals_recursive(
     stmts: &[Stmt],
     globals: &mut std::collections::HashMap<StringId, usize>,
@@ -1947,8 +1973,9 @@ fn register_globals_recursive(
                     is_fiber: false,
                     max_locals: 0,
                     has_loops: false,
+                    has_terminal_ops: false,
                     jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
-        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 });
                 register_globals_recursive(body, globals, func_indices, functions, false);
             }
@@ -1961,8 +1988,9 @@ fn register_globals_recursive(
                     is_fiber: true,
                     max_locals: 0,
                     has_loops: false,
+                    has_terminal_ops: false,
                     jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
-        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 });
                 register_globals_recursive(body, globals, func_indices, functions, false);
             }
@@ -2065,14 +2093,16 @@ impl Compiler {
                 _ => false,
             }
         });
+        let main_bytecode = Arc::new(main_compiler.bytecode);
         let main_chunk = FunctionChunk {
-            bytecode: Arc::new(main_compiler.bytecode),
+            has_terminal_ops: detect_terminal_ops(&main_bytecode),
+            bytecode: main_bytecode,
             spans: Arc::new(main_compiler.spans),
             is_fiber: false,
             max_locals: main_compiler.max_locals_used.max(main_compiler.next_local),
             has_loops,
             jit_ptr: Arc::new(std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())),
-        call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            call_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         };
         (main_chunk, Arc::new(std::mem::take(&mut self.constants)), Arc::new(std::mem::take(&mut self.functions)))
     }
@@ -2107,8 +2137,10 @@ fn compile_function_helper(
         }
     });
 
+    let helper_bytecode = Arc::new(compiler.bytecode);
     FunctionChunk {
-        bytecode: Arc::new(compiler.bytecode),
+        has_terminal_ops: detect_terminal_ops(&helper_bytecode),
+        bytecode: helper_bytecode,
         spans: Arc::new(compiler.spans),
         is_fiber,
         max_locals: compiler.max_locals_used.max(compiler.next_local),

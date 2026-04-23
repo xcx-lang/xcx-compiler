@@ -11,7 +11,7 @@ use crossterm::{
     execute,
     terminal::{Clear, ClearType, enable_raw_mode, disable_raw_mode},
     cursor::{MoveTo, Show, Hide},
-    event::{self, Event, KeyCode, KeyEvent},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -770,6 +770,9 @@ pub struct FunctionChunk {
     pub is_fiber: bool,
     pub max_locals: usize,
     pub has_loops: bool,
+    /// Functions that contain terminal/input opcodes cannot be JIT-compiled
+    /// because the JIT has no support for those opcodes.
+    pub has_terminal_ops: bool,
     pub jit_ptr: Arc<std::sync::atomic::AtomicPtr<u8>>,
     pub call_count: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -2043,7 +2046,7 @@ impl Executor {
         }
 
         // Trigger Method JIT
-        if jit_ptr.is_null() && !chunk.has_loops && chunk.bytecode.len() < 500 {
+        if jit_ptr.is_null() && !chunk.has_loops && !chunk.has_terminal_ops && chunk.bytecode.len() < 500 {
             let count = chunk.call_count.fetch_add(1, Ordering::Relaxed);
             if count == 10 {
                 let vm_copy = vm_arc.clone();
@@ -2228,31 +2231,16 @@ impl Executor {
             OpCode::TerminalRun { dst, cmd_src } => {
                 let cmd = locals[cmd_src as usize].to_string();
                 drop(glbs.take());
-                
-                // To avoid recursive cargo run deadlocks (especially during tests),
-                // we try to use the built binary directly if we are in a development environment.
-                let status = if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-                    let base = std::path::PathBuf::from(manifest_dir).join("target");
-                    let debug_bin = base.join("debug").join("xcx-compiler.exe");
-                    let release_bin = base.join("release").join("xcx-compiler.exe");
-                    
-                    if debug_bin.exists() {
-                        std::process::Command::new(debug_bin).arg(&cmd).status()
-                    } else if release_bin.exists() {
-                        std::process::Command::new(release_bin).arg(&cmd).status()
-                    } else {
-                        std::process::Command::new("cargo").args(["run", "--release", "--", &cmd]).status()
-                    }
-                } else if let Ok(exe) = std::env::current_exe() {
-                    let exe_name = exe.file_name().unwrap_or_default().to_string_lossy();
-                    if exe_name.contains("xcx-compiler") {
-                         std::process::Command::new(exe).arg(&cmd).status()
-                    } else {
-                         std::process::Command::new("cargo").args(["run", "--release", "--", &cmd]).status()
-                    }
+
+                // [XCX 3.0] Refactored to be Cargo-independent.
+                // We use the current executable to run the command, which allows running
+                // scripts in any directory without requiring a Cargo.toml.
+                let status = if let Ok(exe) = std::env::current_exe() {
+                    std::process::Command::new(exe).arg(&cmd).status()
                 } else {
-                    std::process::Command::new("cargo").args(["run", "--release", "--", &cmd]).status()
+                    std::process::Command::new("xcx").arg(&cmd).status()
                 };
+
                 *glbs = Some(vm_arc.globals.write());
                 let success = status.map(|s| s.success()).unwrap_or(false);
                 let res = Value::from_bool(success);
@@ -2323,7 +2311,13 @@ impl Executor {
                 let res = match event::poll(std::time::Duration::from_millis(0)) {
                     Ok(true) => {
                         match event::read() {
-                            Ok(Event::Key(KeyEvent { code, .. })) => map_key_code_to_value(code),
+                            Ok(Event::Key(KeyEvent { code, kind, .. })) => {
+                                if kind == KeyEventKind::Press {
+                                    map_key_code_to_value(code)
+                                } else {
+                                    Value::from_bool(false)
+                                }
+                            }
                             Ok(_) => Value::from_bool(false),
                             Err(_) => {
                                 eprintln!("R443: Error: Failed to read input{}", self.current_span_info(*ip));
@@ -2352,7 +2346,12 @@ impl Executor {
                 drop(glbs.take());
                 let res = loop {
                     match event::read() {
-                        Ok(Event::Key(KeyEvent { code, .. })) => break map_key_code_to_value(code),
+                        Ok(Event::Key(KeyEvent { code, kind, .. })) => {
+                            if kind == KeyEventKind::Press {
+                                break map_key_code_to_value(code);
+                            }
+                            continue;
+                        }
                         Ok(_) => continue,
                         Err(_) => {
                             eprintln!("R443: Error: Failed to read input{}", self.current_span_info(*ip));
