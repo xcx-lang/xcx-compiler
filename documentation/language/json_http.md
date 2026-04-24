@@ -265,11 +265,11 @@ yield net.respond(204, <<< {} >>>);
 yield net.respond(404, <<< {"error": "not found"} >>>);
 ```
 
-| Parameter | Type        | Required | Description                    |
-|-----------|-------------|----------|--------------------------------|
-| status    | `i`         | Yes      | HTTP status code               |
-| body      | `json`      | Yes      | Use `<<< {} >>>` for empty     |
-| headers   | `map:s<->s` | No       | Additional response headers    |
+| Parameter | Type        | Required | Description                          |
+|-----------|-------------|----------|--------------------------------------|
+| status    | `i`         | Yes      | HTTP status code                     |
+| body      | `json \| s` | Yes      | JSON object or raw string; use `<<< {} >>>` for empty JSON |
+| headers   | `map:s<->s` | No       | Additional response headers          |
 
 ### CORS and Preflight
 
