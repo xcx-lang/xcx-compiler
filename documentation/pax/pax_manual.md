@@ -1,68 +1,66 @@
-# PAX Package Manager Manual (v3.1)
+# PAX Package Manager Manual
 
-PAX is the official package manager for XCX, providing project scaffolding, dependency management with version pinning, and a professional registry integration.
+PAX is the official package manager for XCX, integrated directly into the `xcx` binary. It manages dependencies, project scaffolding, and build automation.
 
 ## Project Configuration: `project.pax`
 
-Every PAX project is centered around a `project.pax` file. It uses a custom declarative format supporting professional metadata.
+Every PAX project must have a `project.pax` file in its root directory. It uses a custom declarative format.
 
 ```pax
 ---
 PAX Project Configuration
 *---
 /
-    name        :: "my_project",
-    version     :: "1.0.0",
-    author      :: "DeveloperName",
-    description :: "A quick description of the project library.",
-    main        :: "src/app.xcx",          --- Custom entry point (optional)
-    tags        :: ["math", "utility"],
-    deps        :: [
-        "mathlib@1.2.0",            --- Pin to specific version
-        "user/repo",                --- GitHub shortcut (latest)
-        "https://domain.com/lib.xcx" --- Direct URL
+    name :: "my_project",
+    deps :: [
+        "user/repo",
+        "https://example.com/lib.xcx"
     ]
 /
 ```
 
-### Core Metadata:
-- **name**: Unique package identifier.
-- **version**: Semantic version (e.g., "1.0.0").
-- **author**: Developer name (synced with registry).
-- **main**: Path to the primary source file (default: `src/main.xcx`).
-- **deps**: List of dependencies. Supported formats:
-    - `name`: Fetches latest from `pax.xcxlang.com`.
-    - `name@version`: Fetches specific version.
-    - `user/repo`: GitHub shortcut.
+- **name**: Logical name of the project.
+- **deps**: List of dependencies. Supports GitHub shortcuts (`user/repo`) and direct URLs.
 
 ## Command Reference
 
-### Core Commands
-| Command                | Description                                          |
-|------------------------|------------------------------------------------------|
-| `xcx pax new <name>`    | Generates a professional project structure.           |
-| `xcx pax install`        | Installs deps (minimum library files only).         |
-| `xcx pax clone <name>`   | Clones the entire package repository/structure.      |
-| `xcx pax add <dep>`      | Adds a dep (supports `@version`) and installs it.     |
-| `xcx pax remove <name>`  | Removes a package from `project.pax` and `pax.lock`.  |
-| `xcx pax search <query>` | Searches the PAX Registry (`pax.xcxlang.com`).      |
-| `xcx pax run [path]`    | Executes the project (entry defined in `main`).      |
+PAX is invoked via `xcx pax <command>`.
 
-### Registry Commands (Authentication Required)
-| Command                | Description                                          |
-|------------------------|------------------------------------------------------|
-| `xcx pax login <token>` | Saves your API token for publishing.                 |
-| `xcx pax logout`        | Clears the stored session.                           |
-| `xcx pax whoami`        | Verifies your registry account and role.             |
-| `xcx pax publish`       | Pushes your project manifest to the registry.        |
+| Command                  | Description                                          |
+|--------------------------|------------------------------------------------------|
+| `xcx pax new <name>`     | Generates a new project structure.                   |
+| `xcx pax clone <package>`| Downloads a published package as a local project.    |
+| `xcx pax install`        | Fetches dependencies into the `lib/` directory.      |
+| `xcx pax add <dep>`      | Adds a dependency and installs it immediately.       |
+| `xcx pax remove <name>`  | Removes a dependency from `project.pax`.             |
+| `xcx pax search <query>` | Searches the registry for available packages.        |
+| `xcx pax run [path]`     | Executes the project (entry: `src/main.xcx`).        |
 
-## Deterministic Builds: `pax.lock`
+### `xcx pax clone <package>`
 
-When you run `install` or `add`, PAX generates a `pax.lock` file. This file "locks" your dependencies to specific versions and source files, ensuring that everyone on your team has exactly the same environment. **Always commit your `pax.lock` to version control.**
+Downloads a published package from the PAX registry into a new local directory, ready to run or modify.
+
+```sh
+xcx pax clone snake_game
+xcx pax clone beta/snake_game
+```
+
+- The argument is the package name as listed in the registry (optionally prefixed with `author/`).
+- Creates a directory named after the package in the current working directory.
+- Copies the full project structure: `project.pax`, `src/`, and any other files declared in `files`.
+- Does **not** install dependencies automatically — run `xcx pax install` inside the cloned directory afterwards.
+
+```sh
+xcx pax clone snake_game
+cd snake_game
+xcx pax install
+xcx pax run
+```
 
 ## Directory Structure
-- `project.pax`: Main configuration.
-- `pax.lock`: Dependency lockfile.
-- `src/`: Source code.
-- `lib/`: Downloaded dependencies (standard format: `lib/[package_name]/`).
-- `README.md`: Project documentation.
+
+A standard PAX project follows this layout:
+- `project.pax`: Configuration.
+- `src/`: Source code (main entry: `main.xcx`).
+- `lib/`: Downloaded dependencies (managed by PAX).
+- `tests/`: Project-specific tests.
