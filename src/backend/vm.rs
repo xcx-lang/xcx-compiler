@@ -14,6 +14,7 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
 };
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MethodKind {
     Push, Pop, Len, Count, Size, IsEmpty, Clear, Contains, Get, Insert, Update, Delete, Find, Join, Show, Sort, Reverse,
@@ -166,6 +167,19 @@ pub enum OpCode {
     MethodCallNamed { dst: u8, kind: MethodKind, base: u8, arg_count: u8, names_idx: u32 },
 }
 
+fn map_key_code_to_raw_ansi(code: KeyCode) -> String {
+    match code {
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Esc => "\x1b".to_string(),
+        KeyCode::Enter => "\n".to_string(),
+        KeyCode::Up => "\x1b[A".to_string(),
+        KeyCode::Down => "\x1b[B".to_string(),
+        KeyCode::Left => "\x1b[D".to_string(),
+        KeyCode::Right => "\x1b[C".to_string(),
+        _ => "".to_string(),
+    }
+}
+
 fn map_key_code_to_value(code: KeyCode) -> Value {
     match code {
         KeyCode::Char(c) => Value::from_string(Arc::new(vec![c as u8])),
@@ -178,7 +192,7 @@ fn map_key_code_to_value(code: KeyCode) -> Value {
         KeyCode::Left => Value::from_string(Arc::new(b"LEFT".to_vec())),
         KeyCode::Right => Value::from_string(Arc::new(b"RIGHT".to_vec())),
         KeyCode::F(n) => Value::from_string(Arc::new(format!("F{}", n).into_bytes())),
-        _ => Value::from_bool(false),
+        _ => Value::from_string(Arc::new(vec![])),
     }
 }
 
@@ -680,6 +694,7 @@ pub struct FiberState {
     pub locals: Vec<Value>,
     pub is_done: bool,
     pub yielded_value: Option<Value>,
+    #[allow(dead_code)]
     pub trace_revision: u64,
 }
 
@@ -771,9 +786,10 @@ pub struct FunctionChunk {
     pub max_locals: usize,
     pub has_loops: bool,
     /// Functions that contain terminal/input opcodes cannot be JIT-compiled
-    /// because the JIT has no support for those opcodes.
+    #[allow(dead_code)]
     pub has_terminal_ops: bool,
     pub jit_ptr: Arc<std::sync::atomic::AtomicPtr<u8>>,
+    #[allow(dead_code)]
     pub call_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -786,8 +802,9 @@ pub struct SharedContext {
 pub struct VM {
     pub globals: Arc<RwLock<Vec<Value>>>,
     pub error_count: std::sync::atomic::AtomicUsize,
-    pub traces: Arc<RwLock<std::collections::HashMap<usize, Arc<Trace>>>>,
+    pub traces: Arc<RwLock<std::collections::HashMap<(usize, usize), Arc<Trace>>>>,
     pub jit: parking_lot::Mutex<crate::backend::jit::JIT>,
+    #[allow(dead_code)]
     pub jit_revision: std::sync::atomic::AtomicU64,
 }
 
@@ -803,9 +820,12 @@ enum OpResult {
 
 
 impl VM {
+    pub const MAX_GLOBALS: usize = 4096;
+    pub const POOL_INITIAL_CAPACITY: usize = 32;
+
     pub fn new() -> Self {
         Self {
-            globals: Arc::new(RwLock::new(vec![Value::from_bool(false); 1024])),
+            globals: Arc::new(RwLock::new(vec![Value::from_bool(false); Self::MAX_GLOBALS])),
             error_count: std::sync::atomic::AtomicUsize::new(0),
             traces: Arc::new(RwLock::new(std::collections::HashMap::new())),
             jit: parking_lot::Mutex::new(crate::backend::jit::JIT::new()),
@@ -845,17 +865,19 @@ impl VM {
             http_req: None,
             http_req_val: None,
             terminal_raw_enabled: false,
-            hot_counts_pool: Vec::with_capacity(32),
-            trace_cache_pool: Vec::with_capacity(32),
-            locals_pool: Vec::with_capacity(32),
+            terminal_raw_os_active: false,
+            hot_counts_pool: Vec::with_capacity(VM::POOL_INITIAL_CAPACITY),
+            trace_cache_pool: Vec::with_capacity(VM::POOL_INITIAL_CAPACITY),
+            locals_pool: Vec::with_capacity(VM::POOL_INITIAL_CAPACITY),
             trace_revision: 0,
+            current_func_id: usize::MAX,
         };
         // Populate initial cache
         {
             let traces = executor.vm.traces.read();
-            for (ip, trace) in traces.iter() {
-                if *ip < executor.trace_cache.len() {
-                    executor.trace_cache[*ip] = Some(trace.clone());
+            for (&(fid, tip), trace) in traces.iter() {
+                if fid == usize::MAX && tip < executor.trace_cache.len() {
+                    executor.trace_cache[tip] = Some(trace.clone());
                 }
             }
         }
@@ -875,16 +897,22 @@ pub struct Executor {
     http_req: Option<Arc<parking_lot::Mutex<Option<tiny_http::Request>>>>,
     http_req_val: Option<Value>,
     terminal_raw_enabled: bool,
-    // [XCX 3.0 Fast-Path Pooling]
+    terminal_raw_os_active: bool,
+    // [XCX 3.1 Fast-Path Pooling]
     // We pool vectors to avoid O(N) allocations in recursive calls.
     hot_counts_pool: Vec<Vec<usize>>,
     trace_cache_pool: Vec<Vec<Option<Arc<Trace>>>>,
     locals_pool: Vec<Vec<Value>>,
+    #[allow(dead_code)]
     trace_revision: u64,
+    current_func_id: usize,
 }
 
 impl Drop for Executor {
     fn drop(&mut self) {
+        if self.terminal_raw_os_active {
+            let _ = disable_raw_mode();
+        }
     }
 }
 
@@ -1955,6 +1983,8 @@ impl Executor {
     }
 
     fn run_frame_owned_with_guard<'a>(&mut self, chunk: FunctionChunk, vm_arc: &'a Arc<VM>, glbs: &mut Option<RwLockWriteGuard<'a, Vec<Value>>>) -> Option<Value> {
+        let old_func_id = self.current_func_id;
+        self.current_func_id = usize::MAX;
         self.current_spans = Some(chunk.spans.clone());
         let mut ip = 0;
         let mut locals = vec![Value::from_bool(false); chunk.max_locals];
@@ -1962,11 +1992,13 @@ impl Executor {
         let old_trace_cache = std::mem::replace(&mut self.trace_cache, vec![None; chunk.bytecode.len()]);
         self.recording_trace = None;
         self.is_recording = false;
+        
+        self.trace_cache.fill(None);
         {
             let traces = self.vm.traces.read();
-            for (ip, trace) in traces.iter() {
-                if *ip < self.trace_cache.len() {
-                    self.trace_cache[*ip] = Some(trace.clone());
+            for (&(fid, tip), trace) in traces.iter() {
+                if fid == usize::MAX && tip < self.trace_cache.len() {
+                    self.trace_cache[tip] = Some(trace.clone());
                 }
             }
         }
@@ -2004,6 +2036,7 @@ impl Executor {
         }
         self.hot_counts = old_hot;
         self.trace_cache = old_trace_cache;
+        self.current_func_id = old_func_id;
         for v in locals { unsafe { v.dec_ref(); } }
         final_res
     }
@@ -2016,6 +2049,8 @@ impl Executor {
     }
 
     fn run_frame_with_guard<'a>(&mut self, chunk: FunctionChunk, params: &[Value], vm_arc: &'a Arc<VM>, glbs: &mut Option<RwLockWriteGuard<'a, Vec<Value>>>, func_id: usize) -> Option<Value> {
+        let old_func_id = self.current_func_id;
+        self.current_func_id = func_id;
         let old_spans = self.current_spans.replace(chunk.spans.clone());
         let mut ip = 0;
         
@@ -2042,29 +2077,42 @@ impl Executor {
             *glbs = Some(vm_arc.globals.write());
             
             self.locals_pool.push(locals);
+            self.current_func_id = old_func_id;
             return Some(Value(res_bits));
         }
 
-        // Trigger Method JIT
-        if jit_ptr.is_null() && !chunk.has_loops && !chunk.has_terminal_ops && chunk.bytecode.len() < 500 {
-            let count = chunk.call_count.fetch_add(1, Ordering::Relaxed);
-            if count == 10 {
-                let vm_copy = vm_arc.clone();
-                let chunk_copy = chunk.clone();
-                let func_id_copy = func_id;
-                {
-                    let mut jit = vm_copy.jit.lock();
-                    match jit.compile_method(func_id_copy, &chunk_copy, &self.ctx.constants) {
-                        Ok(ptr) => {
-                            chunk_copy.jit_ptr.store(ptr as *mut u8, Ordering::Release);
+        // Trigger Method JIT safely only for functions that don't load any Float constants and don't call dynamic object methods.
+        // This avoids dynamic float/method JIT crashes while restoring integer recursive speed (e.g. Fibonacci).
+        let has_methods = chunk.bytecode.iter().any(|op| matches!(op, OpCode::MethodCall { .. }));
+        if jit_ptr.is_null() && !has_methods && !chunk.has_loops && !chunk.has_terminal_ops && chunk.bytecode.len() < 500 {
+            let has_floats = chunk.bytecode.iter().any(|op| {
+                if let OpCode::LoadConst { idx, .. } = op {
+                    self.ctx.constants[*idx as usize].is_float()
+                } else {
+                    false
+                }
+            });
+
+            if !has_floats {
+                let count = chunk.call_count.fetch_add(1, Ordering::Relaxed);
+                if count == 10 {
+                    let vm_copy = vm_arc.clone();
+                    let chunk_copy = chunk.clone();
+                    let func_id_copy = func_id;
+                    {
+                        let mut jit = vm_copy.jit.lock();
+                        match jit.compile_method(func_id_copy, &chunk_copy, &self.ctx.constants) {
+                            Ok(ptr) => {
+                                chunk_copy.jit_ptr.store(ptr as *mut u8, Ordering::Release);
+                            }
+                            Err(_) => {}
                         }
-                        Err(_) => {}
                     }
                 }
             }
         }
 
-        // [XCX 3.0 Fast-Path Pooling] Retrieve or create vectors for this frame
+        // [XCX 3.1 Fast-Path Pooling] Retrieve or create vectors for this frame
         let mut locals = self.locals_pool.pop().unwrap_or_else(|| Vec::with_capacity(chunk.max_locals.max(params.len())));
         locals.clear();
         for &v in params {
@@ -2092,19 +2140,15 @@ impl Executor {
         };
 
         if !trace_cache.is_empty() {
+            trace_cache.fill(None);
             if trace_cache.len() != chunk.bytecode.len() {
                 trace_cache.resize(chunk.bytecode.len(), None);
-                trace_cache.fill(None);
-            } else {
-                let current_rev = self.vm.jit_revision.load(Ordering::Relaxed);
-                if self.trace_revision < current_rev {
-                    let traces = self.vm.traces.read();
-                    for (tip, trace) in traces.iter() {
-                         if *tip < trace_cache.len() {
-                             trace_cache[*tip] = Some(trace.clone());
-                         }
-                    }
-                    self.trace_revision = current_rev;
+            }
+            
+            let traces = self.vm.traces.read();
+            for (&(fid, tip), trace) in traces.iter() {
+                if fid == func_id && tip < trace_cache.len() {
+                    trace_cache[tip] = Some(trace.clone());
                 }
             }
         }
@@ -2145,7 +2189,7 @@ impl Executor {
             }
         }
 
-        // [XCX 3.0 Fast-Path Pooling] Restore metadata and return vectors to pool
+        // [XCX 3.1 Fast-Path Pooling] Restore metadata and return vectors to pool
         let hot_counts = std::mem::replace(&mut self.hot_counts, old_hot);
         let trace_cache = std::mem::replace(&mut self.trace_cache, old_trace_cache);
         
@@ -2158,6 +2202,7 @@ impl Executor {
         self.locals_pool.push(locals);
 
         self.current_spans = old_spans;
+        self.current_func_id = old_func_id;
         final_res
     }
 
@@ -2169,11 +2214,41 @@ impl Executor {
                 let _ = std::io::stdout().flush();
                 // Release globals lock before blocking on stdin
                 drop(glbs.take());
-                let mut line = String::new();
-                let stdin = std::io::stdin();
-                let _ = stdin.lock().read_line(&mut line);
+
+                let trimmed_string: String = if self.terminal_raw_enabled {
+                    let mut latest_key = String::new();
+                    while let Ok(true) = event::poll(std::time::Duration::from_millis(0)) {
+                        if let Ok(ev) = event::read() {
+                            match ev {
+                                Event::Key(KeyEvent { code, kind, .. }) => {
+                                    if kind != KeyEventKind::Release {
+                                        latest_key = map_key_code_to_raw_ansi(code);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    latest_key
+                } else {
+                    if self.terminal_raw_os_active {
+                        // Purge any pending raw keyboard events to prevent them from leaking into the cooked stdin stream.
+                        while let Ok(true) = event::poll(std::time::Duration::from_millis(0)) {
+                            let _ = event::read();
+                        }
+                        let _ = disable_raw_mode();
+                        self.terminal_raw_os_active = false;
+                    }
+                    let mut line = String::new();
+                    let stdin = std::io::stdin();
+                    let _ = stdin.lock().read_line(&mut line);
+                    line.trim_end_matches(['\n', '\r']).to_string()
+                };
+
                 *glbs = Some(vm_arc.globals.write());
-                let trimmed = line.trim_end_matches(['\n', '\r']);
+                let trimmed = trimmed_string.as_str();
                 
                 let val = match ty {
                     TypeTag::Int => {
@@ -2184,16 +2259,24 @@ impl Executor {
                         if let Ok(n) = trimmed.parse::<i64>() {
                             Value::from_i64(n)
                         } else {
-                            eprintln!("R103: Error: Type mismatch - expected integer, got '{}' at input{}", trimmed, self.current_span_info(*ip));
-                            return OpResult::Halt;
+                            if self.terminal_raw_enabled && trimmed.is_empty() {
+                                Value::from_i64(0)
+                            } else {
+                                eprintln!("R103: Error: Type mismatch - expected integer, got '{}' at input{}", trimmed, self.current_span_info(*ip));
+                                return OpResult::Halt;
+                            }
                         }
                     }
                     TypeTag::Float => {
                         if let Ok(f) = trimmed.parse::<f64>() {
                             Value::from_f64(f)
                         } else {
-                            eprintln!("R103: Error: Type mismatch - expected float, got '{}' at input{}", trimmed, self.current_span_info(*ip));
-                            return OpResult::Halt;
+                            if self.terminal_raw_enabled && trimmed.is_empty() {
+                                Value::from_f64(0.0)
+                            } else {
+                                eprintln!("R103: Error: Type mismatch - expected float, got '{}' at input{}", trimmed, self.current_span_info(*ip));
+                                return OpResult::Halt;
+                            }
                         }
                     }
                     TypeTag::Bool => {
@@ -2202,8 +2285,12 @@ impl Executor {
                         } else if trimmed == "false" {
                             Value::from_bool(false)
                         } else {
-                            eprintln!("R103: Error: Type mismatch - expected boolean, got '{}' at input{}", trimmed, self.current_span_info(*ip));
-                            return OpResult::Halt;
+                            if self.terminal_raw_enabled && trimmed.is_empty() {
+                                Value::from_bool(false)
+                            } else {
+                                eprintln!("R103: Error: Type mismatch - expected boolean, got '{}' at input{}", trimmed, self.current_span_info(*ip));
+                                return OpResult::Halt;
+                            }
                         }
                     }
                     TypeTag::String => {
@@ -2232,7 +2319,7 @@ impl Executor {
                 let cmd = locals[cmd_src as usize].to_string();
                 drop(glbs.take());
 
-                // [XCX 3.0] Refactored to be Cargo-independent.
+                // [XCX 3.1] Refactored to be Cargo-independent.
                 // We use the current executable to run the command, which allows running
                 // scripts in any directory without requiring a Cargo.toml.
                 let status = if let Ok(exe) = std::env::current_exe() {
@@ -2250,20 +2337,30 @@ impl Executor {
             }
             OpCode::TerminalClear => {
                 let mut out = std::io::stdout();
-                let _ = execute!(out, Clear(ClearType::All), MoveTo(0, 0));
+                if self.terminal_raw_os_active {
+                    let _ = execute!(out, MoveTo(0, 0));
+                } else {
+                    let _ = execute!(out, Clear(ClearType::All), MoveTo(0, 0));
+                }
                 let _ = out.flush();
                 OpResult::Continue
             }
             OpCode::TerminalRaw => {
-                if let Err(_) = enable_raw_mode() {
-                    eprintln!("R440: Error: Failed to set terminal mode{}", self.current_span_info(*ip));
-                    return OpResult::Halt;
+                if !self.terminal_raw_os_active {
+                    if let Err(_) = enable_raw_mode() {
+                        eprintln!("R440: Error: Failed to set terminal mode{}", self.current_span_info(*ip));
+                        return OpResult::Halt;
+                    }
+                    self.terminal_raw_os_active = true;
+                    // Purge any pending raw keyboard events immediately after enabling raw mode to ensure a clean state
+                    while let Ok(true) = event::poll(std::time::Duration::from_millis(0)) {
+                        let _ = event::read();
+                    }
                 }
                 self.terminal_raw_enabled = true;
                 OpResult::Continue
             }
             OpCode::TerminalNormal => {
-                let _ = disable_raw_mode();
                 self.terminal_raw_enabled = false;
                 OpResult::Continue
             }
@@ -2298,6 +2395,7 @@ impl Executor {
             }
             OpCode::TerminalExit => {
                 let _ = disable_raw_mode();
+                self.terminal_raw_os_active = false;
                 std::process::exit(0);
             }
             OpCode::InputKey { dst } => {
@@ -2315,17 +2413,17 @@ impl Executor {
                                 if kind == KeyEventKind::Press {
                                     map_key_code_to_value(code)
                                 } else {
-                                    Value::from_bool(false)
+                                    Value::from_string(Arc::new(vec![]))
                                 }
                             }
-                            Ok(_) => Value::from_bool(false),
+                            Ok(_) => Value::from_string(Arc::new(vec![])),
                             Err(_) => {
                                 eprintln!("R443: Error: Failed to read input{}", self.current_span_info(*ip));
                                 return OpResult::Halt;
                             }
                         }
                     }
-                    Ok(false) => Value::from_bool(false),
+                    Ok(false) => Value::from_string(Arc::new(vec![])),
                     Err(_) => {
                         eprintln!("R443: Error: Failed to read input{}", self.current_span_info(*ip));
                         return OpResult::Halt;
@@ -2378,16 +2476,37 @@ impl Executor {
                 OpResult::Continue
             }
             OpCode::JsonParse { dst, src } => {
-                let s = locals[src as usize].to_string();
-                let res = if s.is_empty() {
-                    Value::from_bool(false)
+                let val = locals[src as usize];
+                let res = if val.is_string() {
+                    let b = unsafe { &*(val.unpack_ptr::<Vec<u8>>()) };
+                    if let Ok(s_str) = std::str::from_utf8(b) {
+                        if s_str.is_empty() {
+                            Value::from_bool(false)
+                        } else {
+                            match serde_json::from_str::<serde_json::Value>(s_str) {
+                                Ok(j) => json_serde_to_value_owned(j),
+                                Err(e) => {
+                                    let preview = if s_str.len() > 50 { format!("{}...", &s_str[..50]) } else { s_str.to_string() };
+                                    eprintln!("R305: Error: Invalid JSON - {}. Input: {:?}{}", e, preview, self.current_span_info(*ip));
+                                    return OpResult::Halt;
+                                }
+                            }
+                        }
+                    } else {
+                        Value::from_bool(false)
+                    }
                 } else {
-                    match serde_json::from_str::<serde_json::Value>(&s) {
-                        Ok(j) => json_serde_to_value(&j),
-                        Err(e) => {
-                            let preview = if s.len() > 50 { format!("{}...", &s[..50]) } else { s.clone() };
-                            eprintln!("R305: Error: Invalid JSON - {}. Input: {:?}{}", e, preview, self.current_span_info(*ip));
-                            return OpResult::Halt;
+                    let s = val.to_string();
+                    if s.is_empty() {
+                        Value::from_bool(false)
+                    } else {
+                        match serde_json::from_str::<serde_json::Value>(&s) {
+                            Ok(j) => json_serde_to_value_owned(j),
+                            Err(e) => {
+                                let preview = if s.len() > 50 { format!("{}...", &s[..50]) } else { s.clone() };
+                                eprintln!("R305: Error: Invalid JSON - {}. Input: {:?}{}", e, preview, self.current_span_info(*ip));
+                                return OpResult::Halt;
+                            }
                         }
                     }
                 };
@@ -3007,7 +3126,7 @@ impl Executor {
                 if routes_val.is_array() {
                     let arr_rc = routes_val.as_array();
                     let arr = arr_rc.read();
-                    for (idx, item) in arr.iter().enumerate() {
+                    for (_idx, item) in arr.iter().enumerate() {
                         if item.is_map() {
                             let map_rc = item.as_map();
                             let map = map_rc.read();
@@ -3116,10 +3235,12 @@ impl Executor {
                                         http_req: Some(req_mutex_arc.clone()),
                                         http_req_val: Some(req_val),
                                         terminal_raw_enabled: terminal_raw,
+                                        terminal_raw_os_active: terminal_raw,
                                         hot_counts_pool: Vec::with_capacity(8),
                                         trace_cache_pool: Vec::with_capacity(8),
                                         locals_pool: Vec::with_capacity(8),
                                         trace_revision: 0,
+                                        current_func_id: fid,
                                      };
                                      
                                      let mut ip = 0;
@@ -3423,7 +3544,7 @@ impl Executor {
                         return OpResult::Continue;
                     }
                 } else {
-                    eprintln!("ERROR: LoopNext on non-integers");
+                    // eprintln!("ERROR: LoopNext on non-integers");
                     return OpResult::Halt;
                 }
                 OpResult::Continue
@@ -3824,14 +3945,30 @@ impl Executor {
             }
             OpCode::CastInt { dst, src } => {
                 let val = locals[src as usize];
-                let res = if val.is_int() { val } else if val.is_float() { Value::from_i64(val.as_f64() as i64) } else { Value::from_i64(0) };
+                let res = if val.is_int() {
+                    val
+                } else if val.is_float() {
+                    Value::from_i64(val.as_f64() as i64)
+                } else if val.is_date() {
+                    Value::from_i64(val.as_date())
+                } else {
+                    Value::from_i64(0)
+                };
                 unsafe { locals[dst as usize].dec_ref(); }
                 locals[dst as usize] = res;
                 OpResult::Continue
             }
             OpCode::CastFloat { dst, src } => {
                 let val = locals[src as usize];
-                let res = if val.is_float() { val } else if val.is_int() { Value::from_f64(val.as_i64() as f64) } else { Value::from_f64(0.0) };
+                let res = if val.is_float() {
+                    val
+                } else if val.is_int() {
+                    Value::from_f64(val.as_i64() as f64)
+                } else if val.is_date() {
+                    Value::from_f64(val.as_date() as f64)
+                } else {
+                    Value::from_f64(0.0)
+                };
                 unsafe { locals[dst as usize].dec_ref(); }
                 locals[dst as usize] = res;
                 OpResult::Continue
@@ -4249,7 +4386,8 @@ impl Executor {
             MethodKind::Add => { 
                 let val = args[0];
                 unsafe { val.inc_ref(); }
-                if set_data.elements.insert(val) {
+                let inserted = set_data.elements.insert(val);
+                if inserted {
                     set_data.cache = None;
                 }
                 let res = Value::from_bool(true);
@@ -4284,7 +4422,8 @@ impl Executor {
                 locals[dst as usize] = res;
             }
             MethodKind::IsEmpty  => {
-                let res = Value::from_bool(set_data.elements.is_empty());
+                let is_empty = set_data.elements.is_empty();
+                let res = Value::from_bool(is_empty);
                 unsafe { locals[dst as usize].dec_ref(); }
                 locals[dst as usize] = res;
             }
@@ -5831,6 +5970,7 @@ impl Executor {
                         trace.native_ptr.store(ptr as *mut u8, Ordering::Relaxed);
                     }
                     Err(e) => {
+                        eprintln!("[XCX] Trace JIT compilation failed: {}", e);
                     }
                 }
                 drop(jit);
@@ -5901,7 +6041,7 @@ impl Executor {
                 trace.min_locals = (needed + 1).max(10);
 
                 let arc_trace = Arc::new(trace);
-                self.vm.traces.write().insert(current_ip, arc_trace.clone());
+                self.vm.traces.write().insert((self.current_func_id, current_ip), arc_trace.clone());
                 self.trace_cache[current_ip] = Some(arc_trace);
             } else {
                 self.recording_trace = Some(trace);
@@ -6367,6 +6507,33 @@ fn json_serde_to_value(v: &serde_json::Value) -> Value {
     }
 }
 
+fn json_serde_to_value_owned(v: serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Null    => Value::from_bool(false),
+        serde_json::Value::Bool(b) => Value::from_bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() { Value::from_i64(i) }
+            else if let Some(f) = n.as_f64() { Value::from_f64(f) }
+            else { Value::from_i64(0) }
+        }
+        serde_json::Value::String(s) => Value::from_string(Arc::new(s.into_bytes())),
+        serde_json::Value::Array(arr) => {
+            let mut vals = Vec::with_capacity(arr.len());
+            for x in arr {
+                vals.push(json_serde_to_value_owned(x));
+            }
+            Value::from_array(Arc::new(RwLock::new(vals)))
+        }
+        serde_json::Value::Object(obj) => {
+            let mut map = Vec::with_capacity(obj.len());
+            for (k, v) in obj {
+                map.push((Value::from_string(Arc::new(k.into_bytes())), json_serde_to_value_owned(v)));
+            }
+            Value::from_map(Arc::new(RwLock::new(map)))
+        }
+    }
+}
+
 fn get_path_value_xcx(root: Value, path: &str) -> Value {
     let pp = normalize_json_path(path);
     if pp.is_empty() || pp == "/" {
@@ -6823,7 +6990,7 @@ pub extern "C" fn xcx_jit_call_recursive(
     let executor = unsafe { &mut *executor };
     let params = unsafe { std::slice::from_raw_parts(params_ptr, params_count as usize) };
     
-    let chunk = executor.ctx.functions[func_id_idx].clone();
+    let chunk = &executor.ctx.functions[func_id_idx];
     
     // Fast path: if already JIT-compiled, call directly using pooled locals.
     // Bypasses run_frame_with_guard to avoid redundant locking and tracing overhead.
@@ -6833,7 +7000,7 @@ pub extern "C" fn xcx_jit_call_recursive(
         let mut locals = executor.locals_pool.pop().unwrap_or_else(|| Vec::with_capacity(chunk.max_locals.max(params.len())));
         locals.clear();
         for &v in params {
-            unsafe { v.inc_ref(); }
+            if v.is_ptr() { unsafe { v.inc_ref(); } }
             locals.push(v);
         }
         locals.resize(chunk.max_locals.max(params.len()), Value::from_bool(false));
@@ -6842,15 +7009,15 @@ pub extern "C" fn xcx_jit_call_recursive(
             jit_fn(locals.as_mut_ptr(), globals_ptr, executor.ctx.constants.as_ptr(), _vm as *mut VM, executor)
         };
         
-        for v in locals.iter() {
-            unsafe { v.dec_ref(); }
+        for &v in &locals {
+            if v.is_ptr() { unsafe { v.dec_ref(); } }
         }
         executor.locals_pool.push(locals);
         return res_bits;
     }
     
     let vm_arc = executor.vm.clone();
-    let res = executor.run_frame_with_guard(chunk, params, &vm_arc, &mut None, func_id_idx);
+    let res = executor.run_frame_with_guard(chunk.clone(), params, &vm_arc, &mut None, func_id_idx);
     res.map(|v| v.0).unwrap_or(0)
 }
 

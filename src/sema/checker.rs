@@ -67,6 +67,10 @@ impl TypeErrorKind {
                 format!("[S110] Method '{}' not found on type {}", method, base_type),
             TypeErrorKind::InvalidArgumentCount { expected, actual } =>
                 format!("[S111] Incorrect number of arguments: expected {}, got {}", expected, actual),
+            // Semantic diagnostic codes are partitioned as follows:
+            // * S100 - S199: Classical type-checking and binary parsing errors
+            // * S200 - S299: Fibers, generators, yields, and execution flow rules
+            // * S300 - S399: Database operations and relation mapping alignments
             TypeErrorKind::YieldOutsideFiber =>
                 "[S208] 'yield' used outside a fiber body".to_string(),
             TypeErrorKind::FiberTypeMismatch =>
@@ -132,6 +136,10 @@ impl<'a> Checker<'a> {
         errors
     }
 
+    // pre_scan_stmts only registers top-level function and fiber definitions.
+    // Nested function/fiber definitions declared within block or loop scopes
+    // are not supported by the XCX 3.1 compiler design and will be treated
+    // as syntax block scoping limits.
     fn pre_scan_stmts(&mut self, stmts: &[Stmt], symbols: &mut SymbolTable<'_>) {
         for stmt in stmts {
             match &stmt.kind {
@@ -546,7 +554,6 @@ impl<'a> Checker<'a> {
                 self.loop_depth = prev_loop;
                 self.fiber_context = prev_fiber_ctx;
                 self.fiber_has_yield = prev_has_yield;
-                let _ = name;
             }
             crate::parser::ast::StmtKind::FiberDecl { inner_type, name, fiber_name, args } => {
                 let fiber_name_str = self.interner.lookup(*fiber_name).trim().to_string();

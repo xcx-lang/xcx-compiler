@@ -1,5 +1,6 @@
 pub struct Reporter<'a> {
     lines: Vec<&'a str>,
+    filename: Option<String>,
 }
 
 const ANSI_RED: &str = "\x1b[31;1m";
@@ -12,13 +13,23 @@ impl<'a> Reporter<'a> {
     pub fn new(source: &'a str) -> Self {
         Self {
             lines: source.lines().collect(),
+            filename: None,
         }
+    }
+
+    pub fn with_filename(mut self, filename: &str) -> Self {
+        self.filename = Some(filename.to_string());
+        self
     }
 
     pub fn report(&self, line: usize, col: usize, len: usize, message: &str, level: &str) {
         let level_color = if level == "ERROR" { ANSI_RED } else { ANSI_YELLOW };
         
-        println!("{}{}{}: {}{}{}", level_color, ANSI_BOLD, level, ANSI_RESET, ANSI_BOLD, message);
+        if let Some(ref file) = self.filename {
+            println!("{}{}[{}:{}:{}] {}{}{}: {}{}{}", ANSI_CYAN, ANSI_BOLD, file, line, col, level_color, ANSI_BOLD, level, ANSI_RESET, ANSI_BOLD, message);
+        } else {
+            println!("{}{}{}: {}{}{}", level_color, ANSI_BOLD, level, ANSI_RESET, ANSI_BOLD, message);
+        }
         
         if line > 0 && line <= self.lines.len() {
             let line_content = self.lines[line - 1];
@@ -33,5 +44,10 @@ impl<'a> Reporter<'a> {
 
     pub fn error(&self, line: usize, col: usize, len: usize, message: &str) {
         self.report(line, col, len, message, "ERROR");
+    }
+
+    #[allow(dead_code)]
+    pub fn warn(&self, line: usize, col: usize, len: usize, message: &str) {
+        self.report(line, col, len, message, "WARN");
     }
 }

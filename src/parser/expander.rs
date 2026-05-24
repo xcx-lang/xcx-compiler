@@ -72,7 +72,8 @@ impl<'a> Expander<'a> {
 
                     let source = std::fs::read_to_string(&canonical_path).map_err(|_| format!("Could not read file: {}", path_str))?;
                     let scanner = crate::lexer::scanner::Scanner::new(&source);
-                    let mut parser = crate::parser::pratt::Parser::new_with_interner(&source, scanner, (*self.interner).clone());
+                    let mut parser = crate::parser::pratt::Parser::new_with_interner(&source, scanner, (*self.interner).clone())
+                        .with_filename(&path_str);
                     let sub_program = parser.parse_program();
                     *self.interner = parser.into_interner();
 

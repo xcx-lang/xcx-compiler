@@ -1,8 +1,8 @@
-# XCX 3.0 JSON and HTTP
+# XCX 3.1 JSON and HTTP
 
 ## JSON
 
-JSON objects in XCX 3.0 are **mutable**.
+JSON objects in XCX 3.1 are **mutable**.
 
 ### Creation
 
@@ -265,11 +265,11 @@ yield net.respond(204, <<< {} >>>);
 yield net.respond(404, <<< {"error": "not found"} >>>);
 ```
 
-| Parameter | Type        | Required | Description                    |
-|-----------|-------------|----------|--------------------------------|
-| status    | `i`         | Yes      | HTTP status code               |
-| body      | `json`      | Yes      | Use `<<< {} >>>` for empty     |
-| headers   | `map:s<->s` | No       | Additional response headers    |
+| Parameter | Type        | Required | Description                          |
+|-----------|-------------|----------|--------------------------------------|
+| status    | `i`         | Yes      | HTTP status code                     |
+| body      | `json \| s` | Yes      | JSON object or raw string; use `<<< {} >>>` for empty JSON |
+| headers   | `map:s<->s` | No       | Additional response headers          |
 
 ### CORS and Preflight
 

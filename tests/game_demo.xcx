@@ -7,7 +7,7 @@ i: y = 5;
 
 while (true) do;
     .terminal !move 2 2;
-    >! "XCX 3.0 Interactive Demo";
+    >! "XCX 3.1 Interactive Demo";
     .terminal !move 2 3;
     >! "Use ARROWS to move @, ESC to exit";
     
@@ -39,4 +39,4 @@ end;
 .terminal !normal;
 .terminal !clear;
 .terminal !cursor on;
->! "Demo finished. XCX 3.0 is ready.";
+>! "Demo finished. XCX 3.1 is ready.";

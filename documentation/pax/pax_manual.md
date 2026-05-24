@@ -1,4 +1,4 @@
-# PAX Package Manager Manual (v3.0)
+# PAX Package Manager Manual (v3.1)
 
 PAX is the official package manager for XCX, providing project scaffolding, dependency management with version pinning, and a professional registry integration.
 

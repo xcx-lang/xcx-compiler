@@ -268,6 +268,7 @@ pub enum StmtKind {
         value: Option<Expr>,
     },
     Print(Expr),
+    #[allow(dead_code)]
     TerminalWrite(Expr),
     Input(StringId, Type),
     ExprStmt(Expr),

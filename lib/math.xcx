@@ -1,208 +1,177 @@
----                       _   _     _ _ _      
----                      | | | |   | (_) |     
----  _ __ ___ __ _| |_| |__ | |_| |__   
---- | '_ ` _ \ / _` | __| '_ \| | | '_ \ 
+
+--- ================================================================
+---                      _   _     _ _ _
+---                     | | | |   | (_) |
+---  _ __ ___ __ _| |_| |__ | |_| |__
+--- | '_ ` _ \ / _` | __| '_ \| | | '_ \
 --- | | | | | | (_| | |_| | | | | | |_) |
---- |_| |_| |_|\__,_|\__|_| |_|_|_|_.__/ 
----  +-------------------------------------------------+
----  |  XCX 2.2 · Standard Math Library · v1.0.0      |
----  |  Usage: include "math.xcx" as math;             |
----  +-------------------------------------------------+
----  |  [1] Constants        [6] Trigonometry          |
----  |  [2] Basic - Integer  [7] Number Theory         |
----  |  [3] Basic - Float    [8] Statistics            |
----  |  [4] Powers & Roots   [9] Unit Converters       |
----  |  [5] Logarithms & Exp                           |
----  +-------------------------------------------------+
-
---- ================================================================
----   [1]
----    ___                _              _       
----   / __| ___  _ _  ___| |_ __ _ _ _ | |_ ___ 
----  | (__ / _ \| ' \(_-<|  _/ _` | ' \|  _(_-< 
----   \___|\___/|_||_/__/ \__\__,_|_||_|\__/__/ 
+--- |_| |_| |_|\__,_|\__|_| |_|_|_|_.__/
+---  +---------------------------------------------------+
+---  |  XCX Standard Math Library  v2.0.0               |
+---  |  Usage: include "math.xcx" as math;               |
+---  +---------------------------------------------------+
+---  |  [1]  Constants            [7]  Number Theory     |
+---  |  [2]  Basic - Integer      [8]  Statistics        |
+---  |  [3]  Basic - Float        [9]  Unit Converters   |
+---  |  [4]  Powers & Roots       [10] Geometry          |
+---  |  [5]  Logarithms & Exp     [11] Combinatorics     |
+---  |  [6]  Trigonometry         [12] Bit Operations    |
+---  +---------------------------------------------------+
 --- ================================================================
 
-const f: PI      = 3.14159265358979;   --- ratio of circumference to diameter
-const f: E       = 2.71828182845905;   --- Euler's number
-const f: TAU     = 6.28318530717959;   --- 2 * PI
-const f: PHI     = 1.61803398874989;   --- golden ratio
-const f: SQRT2   = 1.41421356237310;   --- square root of 2
-const f: LN2     = 0.69314718055995;   --- natural log of 2
-const f: LN10    = 2.30258509299405;   --- natural log of 10
-const f: INF     = 999999999999999.0;  --- practical infinity approximation
+--- [1] Constants
+--- ================================================================
+
+const f: PI      = 3.14159265358979;
+const f: E       = 2.71828182845905;
+const f: TAU     = 6.28318530717959;
+const f: PHI     = 1.61803398874989;
+const f: SQRT2   = 1.41421356237310;
+const f: SQRT3   = 1.73205080756888;
+const f: LN2     = 0.69314718055995;
+const f: LN10    = 2.30258509299405;
+const f: LOG2E   = 1.44269504088896;
+const f: INF     = 999999999999999.0;
+const f: EPSILON = 0.000000001;
 const i: INT_MAX = 2147483647;
 const i: INT_MIN = -2147483648;
 
---- ================================================================
----   [2]
----   ___            _      ___     _   
----  | _ ) __ _ ___ (_) __ |_ _|_ _| |_ 
----  | _ \/ _` (_-< | |/ _| | || ' \  _|
----  |___/\__,_/__/ |_|\__||___|_||_\__|
+--- [2] Basic - Integer
 --- ================================================================
 
---- Returns the absolute value of an integer.
 func abs_i(i: x -> i) {
-    if (x < 0) then;
-        return -x;
-    end;
+    if (x < 0) then; return -x; end;
     return x;
 };
 
---- Returns the smaller of two integers.
 func min_i(i: a, i: b -> i) {
-    if (a < b) then; 
-        return a; 
-    end;
+    if (a < b) then; return a; end;
     return b;
 };
 
---- Returns the larger of two integers.
 func max_i(i: a, i: b -> i) {
-    if (a > b) then;
-        return a;
-    end;
+    if (a > b) then; return a; end;
     return b;
 };
 
---- Clamps val to the range [lo, hi].
 func clamp_i(i: val, i: lo, i: hi -> i) {
-    if (val < lo) then; 
-        return lo; 
-    end;
-    if (val > hi) then; 
-        return hi; 
-    end;
+    if (val < lo) then; return lo; end;
+    if (val > hi) then; return hi; end;
     return val;
 };
 
---- Returns 1, -1, or 0 depending on the sign of x.
 func sign_i(i: x -> i) {
-    if (x > 0) then; 
-        return 1;  
-    end;
-    if (x < 0) then; 
-        return -1; 
-    end;
+    if (x > 0) then; return 1; end;
+    if (x < 0) then; return -1; end;
     return 0;
 };
 
---- ================================================================
----   [3]
----   ___            _      ___ _          _   
----  | _ ) __ _ ___ (_) __ | __| |___  __ _| |_ 
----  | _ \/ _` (_-< | |/ _|| _|| / _ \/ _` |  _|
----  |___/\__,_/__/ |_|\__||_| |_\___/\__,_|\__|
+--- Returns true if a and b have the same sign (both positive or both negative).
+func same_sign(i: a, i: b -> b) {
+    return sign_i(a) == sign_i(b);
+};
+
+--- Returns a wrapped into the range [0, m).
+func wrap_i(i: a, i: m -> i) {
+    if (m <= 0) then;
+        halt.error >! "wrap_i: modulus must be positive";
+        return 0;
+    end;
+    i: r = a % m;
+    if (r < 0) then; return r + m; end;
+    return r;
+};
+
+--- [3] Basic - Float
 --- ================================================================
 
---- Returns the absolute value of a float.
 func abs_f(f: x -> f) {
-    if (x < 0.0) then;
-        return -x;
-    end;
+    if (x < 0.0) then; return -x; end;
     return x;
 };
 
---- Returns the smaller of two floats.
 func min_f(f: a, f: b -> f) {
-    if (a < b) then; 
-        return a; 
-    end;
+    if (a < b) then; return a; end;
     return b;
 };
 
---- Returns the larger of two floats.
 func max_f(f: a, f: b -> f) {
-    if (a > b) then; 
-        return a; 
-    end;
+    if (a > b) then; return a; end;
     return b;
 };
 
---- Clamps val to the range [lo, hi].
 func clamp_f(f: val, f: lo, f: hi -> f) {
-    if (val < lo) then; 
-        return lo; 
-    end;
-    if (val > hi) then; 
-        return hi; 
-    end;
+    if (val < lo) then; return lo; end;
+    if (val > hi) then; return hi; end;
     return val;
 };
 
---- Returns 1, -1, or 0 depending on the sign of x.
 func sign_f(f: x -> i) {
-    if (x > 0.0) then; 
-        return 1;  
-    end;
-    if (x < 0.0) then; 
-        return -1; 
-    end;
+    if (x > 0.0) then; return 1; end;
+    if (x < 0.0) then; return -1; end;
     return 0;
 };
 
---- Returns the largest integer less than or equal to x.
 func floor_f(f: x -> i) {
     i: n = i(x);
-    if (x < 0.0 AND f(n) != x) then;
-        return n - 1;
-    end;
+    if (x < 0.0 AND f(n) != x) then; return n - 1; end;
     return n;
 };
 
---- Returns the smallest integer greater than or equal to x.
 func ceil_f(f: x -> i) {
     i: n = i(x);
-    if (x > 0.0 AND f(n) != x) then;
-        return n + 1;
-    end;
+    if (x > 0.0 AND f(n) != x) then; return n + 1; end;
     return n;
 };
 
---- Rounds x to the nearest integer.
 func round_f(f: x -> i) {
     return floor_f(x + 0.5);
 };
 
---- Returns the fractional part of x.
+--- Rounds x to d decimal places.
+func round_to(f: x, i: d -> f) {
+    f: factor = pow_f(10.0, d);
+    return f(round_f(x * factor)) / factor;
+};
+
 func frac(f: x -> f) {
     return x - f(i(x));
 };
 
---- Linear interpolation: a + (b - a) * t
 func lerp(f: a, f: b, f: t -> f) {
     return a + (b - a) * t;
 };
 
---- Linear interpolation with t clamped to [0.0, 1.0].
 func lerp_clamped(f: a, f: b, f: t -> f) {
     f: tc = clamp_f(t, 0.0, 1.0);
     return a + (b - a) * tc;
 };
 
---- Returns true if |a - b| < epsilon.
 func nearly_equal(f: a, f: b, f: epsilon -> b) {
     return abs_f(a - b) < epsilon;
 };
 
---- ================================================================
----   [4]
----   ___                            
----  | _ \_____ __ _____ _ _ ___     
----  |  _/ _ \ V  V / -_) '_(_-<    
----  |_| \___/\_/\_/\___|_| /__/     
----    ___     ___              _    
----   ( _ )   | _ \___ ___  | |_ ___
----   / _ \   |   / _ \/ _ \ |  _(_-<
----   \___/   |_|_\___/\___/  \__/__/
+--- Smooth Hermite interpolation (smoothstep).
+func smoothstep(f: edge0, f: edge1, f: x -> f) {
+    f: t = clamp_f((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+};
+
+--- Maps x from range [a, b] to range [c, d].
+func remap(f: x, f: a, f: b, f: c, f: d -> f) {
+    if (abs_f(b - a) < EPSILON) then;
+        halt.error >! "remap: source range has zero length";
+        return c;
+    end;
+    return c + (x - a) / (b - a) * (d - c);
+};
+
+--- [4] Powers & Roots
 --- ================================================================
 
---- Raises an integer base to a non-negative integer exponent.
---- Uses fast exponentiation by squaring.
 func pow_i(i: base, i: exp -> i) {
     if (exp < 0) then;
-        halt.error >! "pow_i: negative exponent not allowed for integers";
+        halt.error >! "pow_i: negative exponent";
         return 0;
     end;
     if (exp == 0) then; return 1; end;
@@ -210,16 +179,13 @@ func pow_i(i: base, i: exp -> i) {
     i: e = exp;
     i: b = base;
     while (e > 0) do;
-        if (e % 2 == 1) then;
-            result = result * b;
-        end;
+        if (e % 2 == 1) then; result = result * b; end;
         b = b * b;
         e = e / 2;
     end;
     return result;
 };
 
---- Raises a float base to an integer exponent (positive or negative).
 func pow_f(f: base, i: exp -> f) {
     if (exp == 0) then; return 1.0; end;
     b: neg = (exp < 0);
@@ -227,15 +193,13 @@ func pow_f(f: base, i: exp -> f) {
     f: result = 1.0;
     f: b = base;
     while (e > 0) do;
-        if (e % 2 == 1) then;
-            result = result * b;
-        end;
+        if (e % 2 == 1) then; result = result * b; end;
         b = b * b;
         e = e / 2;
     end;
     if (neg) then;
         if (result == 0.0) then;
-            halt.error >! "pow_f: division by zero (1 / 0)";
+            halt.error >! "pow_f: division by zero";
             return 0.0;
         end;
         return 1.0 / result;
@@ -243,10 +207,9 @@ func pow_f(f: base, i: exp -> f) {
     return result;
 };
 
---- Returns the square root of x using Newton-Raphson iteration.
 func sqrt_f(f: x -> f) {
     if (x < 0.0) then;
-        halt.error >! "sqrt_f: square root of negative number";
+        halt.error >! "sqrt_f: negative argument";
         return -1.0;
     end;
     if (x == 0.0) then; return 0.0; end;
@@ -254,16 +217,13 @@ func sqrt_f(f: x -> f) {
     i: iter = 0;
     while (iter < 50) do;
         f: next = (guess + x / guess) / 2.0;
-        if (abs_f(next - guess) < 0.000000001) then;
-            return next;
-        end;
+        if (abs_f(next - guess) < EPSILON) then; return next; end;
         guess = next;
         iter = iter + 1;
     end;
     return guess;
 };
 
---- Returns the cube root of x (works for negative numbers too).
 func cbrt_f(f: x -> f) {
     if (x == 0.0) then; return 0.0; end;
     f: s = 1.0;
@@ -272,37 +232,63 @@ func cbrt_f(f: x -> f) {
     f: g = ax / 3.0;
     i: iter = 0;
     while (iter < 50) do;
-        f: g3 = g * g * g;
-        f: next = g - (g3 - ax) / (3.0 * g * g);
-        if (abs_f(next - g) < 0.000000001) then;
-            return s * next;
-        end;
+        f: g2 = g * g;
+        f: g3 = g2 * g;
+        f: next = g - (g3 - ax) / (3.0 * g2);
+        if (abs_f(next - g) < EPSILON) then; return s * next; end;
         g = next;
         iter = iter + 1;
     end;
     return s * g;
 };
 
---- Returns the hypotenuse of a right triangle: sqrt(a^2 + b^2).
-func hypot(f: a, f: b -> f) {
-    return sqrt_f(a * a + b * b);
+--- Returns the n-th root of x.
+func nroot_f(f: x, i: n -> f) {
+    if (n == 0) then;
+        halt.error >! "nroot_f: n cannot be zero";
+        return 0.0;
+    end;
+    if (n == 2) then; return sqrt_f(x); end;
+    if (n == 3) then; return cbrt_f(x); end;
+    if (x < 0.0 AND n % 2 == 0) then;
+        halt.error >! "nroot_f: even root of negative number";
+        return 0.0;
+    end;
+    f: s = 1.0;
+    if (x < 0.0) then; s = -1.0; end;
+    f: ax = abs_f(x);
+    f: g = ax / f(n);
+    i: iter = 0;
+    while (iter < 60) do;
+        f: gn = pow_f(g, n - 1);
+        f: next = (f(n - 1) * g + ax / gn) / f(n);
+        if (abs_f(next - g) < EPSILON) then; return s * next; end;
+        g = next;
+        iter = iter + 1;
+    end;
+    return s * g;
 };
 
---- ================================================================
----   [5]
----   _                       _ _   _                    
----  | |   ___  __ _  __ _ _ (_) |_| |_  _ __  ___      
----  | |__/ _ \/ _` |/ _` | '_| |  _| ' \| '  \(_-<     
----  |____\___/\__, |\__,_|_| |_|\__|_||_|_|_|_/__/     
----             |___/                                    
----    ___                              _   _      _     
----   | __|_ ___ __  ___ _ _  ___ _ _ | |_(_)__ _| |    
----   | _|\ \ / '_ \/ _ \ ' \/ -_) ' \|  _| / _` | |   
----   |___/_\_\ .__/\___/_||_\___|_||_|\__|_\__,_|_|   
----            |_|                                      
+func hypot(f: a, f: b -> f) {
+    f: aa  = a * a;
+    f: bb  = b * b;
+    f: sum = aa + bb;
+    return sqrt_f(sum);
+};
+
+--- 3D hypotenuse.
+func hypot3(f: a, f: b, f: c -> f) {
+    f: aa  = a * a;
+    f: bb  = b * b;
+    f: cc  = c * c;
+    f: ab  = aa + bb;
+    f: sum = ab + cc;
+    return sqrt_f(sum);
+};
+
+--- [5] Logarithms & Exp
 --- ================================================================
 
---- Returns e raised to the power x, computed via Taylor series.
 func exp_f(f: x -> f) {
     f: result = 1.0;
     f: term   = 1.0;
@@ -310,88 +296,69 @@ func exp_f(f: x -> f) {
     while (n < 100) do;
         term = term * x / f(n);
         result = result + term;
-        if (abs_f(term) < 0.0000000000001) then;
-            return result;
-        end;
+        if (abs_f(term) < 0.0000000000001) then; return result; end;
         n = n + 1;
     end;
     return result;
 };
 
---- Returns the natural logarithm of x.
 func ln_f(f: x -> f) {
     if (x <= 0.0) then;
-        halt.error >! "ln_f: logarithm of non-positive number";
+        halt.error >! "ln_f: non-positive argument";
         return 0.0;
     end;
+    --- Range reduction: bring x into [1, 2) using powers of 2.
+    --- ln(x) = ln(v) + k * ln(2),  where x = v * 2^k,  v in [1, 2).
     i: k = 0;
     f: v = x;
-    while (v >= E) do;
-        v = v / E;
-        k = k + 1;
-    end;
-    while (v < 1.0) do;
-        v = v * E;
-        k = k - 1;
-    end;
-    f: t      = v - 1.0;
-    f: result = 0.0;
-    f: term   = t;
-    i: n      = 1;
-    while (n < 200) do;
-        if (n % 2 == 1) then;
-            result = result + term / f(n);
-        else;
-            result = result - term / f(n);
-        end;
-        term = term * t;
+    while (v >= 2.0) do; v = v / 2.0; k = k + 1; end;
+    while (v < 1.0)  do; v = v * 2.0; k = k - 1; end;
+    --- Now v in [1, 2), use Padé-style: rewrite as ln(1+t), t = v-1 in [0, 1).
+    --- Use the identity ln((1+u)/(1-u)) = 2*(u + u^3/3 + u^5/5 + ...)
+    --- with u = (v-1)/(v+1), which converges much faster.
+    f: u  = (v - 1.0) / (v + 1.0);
+    f: u2 = u * u;
+    f: term   = u;
+    f: result = u;
+    i: n = 1;
+    while (n < 60) do;
+        term = term * u2;
+        result = result + term / f(2 * n + 1);
         if (abs_f(term) < 0.0000000000001) then;
-            return f(k) + result;
+            return result * 2.0 + f(k) * LN2;
         end;
         n = n + 1;
     end;
-    return f(k) + result;
+    return result * 2.0 + f(k) * LN2;
 };
 
---- Returns the base-2 logarithm of x.
 func log2_f(f: x -> f) {
     return ln_f(x) / LN2;
 };
 
---- Returns the base-10 logarithm of x.
 func log10_f(f: x -> f) {
     return ln_f(x) / LN10;
 };
 
---- Returns the logarithm of x in a given base.
 func log_base(f: x, f: base -> f) {
     if (base <= 0.0 OR base == 1.0) then;
-        halt.error >! "log_base: invalid logarithm base";
+        halt.error >! "log_base: invalid base";
         return 0.0;
     end;
     return ln_f(x) / ln_f(base);
 };
 
---- ================================================================
----   [6]
----   _____     _                                     _           
----  |_   _| _ (_) __ _  ___  _ _   ___  _ __   ___| |_ _ _ _  _ 
----    | || '_| |/ _` |/ _ \| ' \ / _ \| '  \ / -_)  _| '_| || |
----    |_||_| |_|\__, |\___/|_||_|\___/|_|_|_|\___|\__|_|  \_, |
----              |___/                                      |__/ 
+--- [6] Trigonometry
 --- ================================================================
 
---- Converts degrees to radians.
 func deg_to_rad(f: deg -> f) {
     return deg * PI / 180.0;
 };
 
---- Converts radians to degrees.
 func rad_to_deg(f: rad -> f) {
     return rad * 180.0 / PI;
 };
 
---- Returns the sine of x (radians) via Taylor series.
 func sin_f(f: x -> f) {
     f: v = x;
     while (v > PI)  do; v = v - TAU; end;
@@ -407,23 +374,28 @@ func sin_f(f: x -> f) {
     return result;
 };
 
---- Returns the cosine of x (radians).
 func cos_f(f: x -> f) {
-    return sin_f(x + PI / 2.0);
+    f: arg = x + PI / 2.0;
+    return sin_f(arg);
 };
 
---- Returns the tangent of x (radians).
+
 func tan_f(f: x -> f) {
     f: c = cos_f(x);
-    if (abs_f(c) < 0.000000001) then;
-        halt.error >! "tan_f: tangent undefined (cosine is zero)";
-        return 0.0;
+    if (abs_f(c) < 0.0000000001) then;
+        f: s = sin_f(x);
+        f: s_sign = 1.0;
+        if (s < 0.0) then; s_sign = -1.0; end;
+        f: c_sign = 1.0;
+        if (c < 0.0) then; c_sign = -1.0; end;
+        return INF * s_sign * c_sign;
     end;
     return sin_f(x) / c;
 };
 
---- Returns the arctangent of x in radians.
 func atan_f(f: x -> f) {
+    if (x == 1.0)  then; return PI / 4.0;  end;
+    if (x == -1.0) then; return -PI / 4.0; end;
     if (x > 1.0)  then; return PI / 2.0  - atan_f(1.0 / x); end;
     if (x < -1.0) then; return -PI / 2.0 - atan_f(1.0 / x); end;
     f: x2     = x * x;
@@ -438,61 +410,50 @@ func atan_f(f: x -> f) {
     return result;
 };
 
---- Returns the angle (radians) of the point (x, y) from the positive x-axis.
 func atan2_f(f: y, f: x -> f) {
-    if (x > 0.0)               then; return atan_f(y / x);          end;
-    if (x < 0.0 AND y >= 0.0)  then; return atan_f(y / x) + PI;     end;
-    if (x < 0.0 AND y < 0.0)   then; return atan_f(y / x) - PI;     end;
-    if (x == 0.0 AND y > 0.0)  then; return PI / 2.0;               end;
-    if (x == 0.0 AND y < 0.0)  then; return -PI / 2.0;              end;
+    if (x > 0.0)               then; return atan_f(y / x);      end;
+    if (x < 0.0 AND y >= 0.0)  then; return atan_f(y / x) + PI; end;
+    if (x < 0.0 AND y < 0.0)   then; return atan_f(y / x) - PI; end;
+    if (x == 0.0 AND y > 0.0)  then; return PI / 2.0;           end;
+    if (x == 0.0 AND y < 0.0)  then; return -PI / 2.0;          end;
     halt.error >! "atan2_f: both arguments are zero";
     return 0.0;
 };
 
---- Returns the arcsine of x in radians. x must be in [-1, 1].
 func asin_f(f: x -> f) {
+    if (x == 1.0)  then; return PI / 2.0;  end;
+    if (x == -1.0) then; return -PI / 2.0; end;
     if (x < -1.0 OR x > 1.0) then;
-        halt.error >! "asin_f: argument out of range [-1, 1]";
+        halt.error >! "asin_f: argument out of [-1, 1]";
         return 0.0;
     end;
     return atan_f(x / sqrt_f(1.0 - x * x));
 };
 
---- Returns the arccosine of x in radians. x must be in [-1, 1].
 func acos_f(f: x -> f) {
     if (x < -1.0 OR x > 1.0) then;
-        halt.error >! "acos_f: argument out of range [-1, 1]";
+        halt.error >! "acos_f: argument out of [-1, 1]";
         return 0.0;
     end;
     return PI / 2.0 - asin_f(x);
 };
 
---- Hyperbolic sine.
 func sinh_f(f: x -> f) {
     return (exp_f(x) - exp_f(-x)) / 2.0;
 };
 
---- Hyperbolic cosine.
 func cosh_f(f: x -> f) {
     return (exp_f(x) + exp_f(-x)) / 2.0;
 };
 
---- Hyperbolic tangent.
 func tanh_f(f: x -> f) {
     f: e2 = exp_f(2.0 * x);
     return (e2 - 1.0) / (e2 + 1.0);
 };
 
---- ================================================================
----   [7]
----   _  _            _               _____ _                      
----  | \| |_  _ _ __ | |__  ___ _ _  |_   _| |_  ___ ___ _ _ _  _ 
----  | .` | || | '  \| '_ \/ -_) '_|   | | | ' \/ -_) _ \ '_| || |
----  |_|\_|\_,_|_|_|_|_.__/\___|_|     |_| |_||_\___\___/_|  \_, |
----                                                            |__/ 
+--- [7] Number Theory
 --- ================================================================
 
---- Returns the greatest common divisor of a and b (Euclidean algorithm).
 func gcd(i: a, i: b -> i) {
     i: x = abs_i(a);
     i: y = abs_i(b);
@@ -504,17 +465,15 @@ func gcd(i: a, i: b -> i) {
     return x;
 };
 
---- Returns the least common multiple of a and b.
 func lcm(i: a, i: b -> i) {
     if (a == 0 OR b == 0) then; return 0; end;
     return abs_i(a / gcd(a, b) * b);
 };
 
---- Returns true if n is a prime number.
 func is_prime(i: n -> b) {
-    if (n < 2)       then; return false; end;
-    if (n == 2)      then; return true;  end;
-    if (n % 2 == 0)  then; return false; end;
+    if (n < 2)      then; return false; end;
+    if (n == 2)     then; return true;  end;
+    if (n % 2 == 0) then; return false; end;
     i: k = 3;
     while (k * k <= n) do;
         if (n % k == 0) then; return false; end;
@@ -523,7 +482,6 @@ func is_prime(i: n -> b) {
     return true;
 };
 
---- Returns n! (iterative, avoids recursion depth limits).
 func factorial(i: n -> i) {
     if (n < 0) then;
         halt.error >! "factorial: negative argument";
@@ -539,7 +497,6 @@ func factorial(i: n -> i) {
     return result;
 };
 
---- Returns the n-th Fibonacci number (iterative).
 func fibonacci(i: n -> i) {
     if (n < 0) then;
         halt.error >! "fibonacci: negative argument";
@@ -559,7 +516,35 @@ func fibonacci(i: n -> i) {
     return b;
 };
 
---- Returns C(n, k) — binomial coefficient "n choose k".
+--- Returns the next prime number after n.
+func next_prime(i: n -> i) {
+    i: c = n + 1;
+    while (NOT is_prime(c)) do;
+        c = c + 1;
+    end;
+    return c;
+};
+
+--- Returns Euler's totient φ(n).
+func totient(i: n -> i) {
+    if (n <= 0) then;
+        halt.error >! "totient: argument must be positive";
+        return 0;
+    end;
+    i: result = n;
+    i: p = 2;
+    i: v = n;
+    while (p * p <= v) do;
+        if (v % p == 0) then;
+            while (v % p == 0) do; v = v / p; end;
+            result = result - result / p;
+        end;
+        p = p + 1;
+    end;
+    if (v > 1) then; result = result - result / v; end;
+    return result;
+};
+
 func combinations(i: n, i: k -> i) {
     if (k < 0 OR k > n) then; return 0; end;
     if (k == 0 OR k == n) then; return 1; end;
@@ -574,7 +559,6 @@ func combinations(i: n, i: k -> i) {
     return result;
 };
 
---- Returns P(n, k) — number of k-permutations of n elements.
 func permutations(i: n, i: k -> i) {
     if (k < 0 OR k > n) then; return 0; end;
     i: result = 1;
@@ -586,26 +570,17 @@ func permutations(i: n, i: k -> i) {
     return result;
 };
 
---- Returns true if n is even.
-func is_even(i: n -> b) {
-    return n % 2 == 0;
-};
+func is_even(i: n -> b) { return n % 2 == 0; };
+func is_odd(i: n -> b)  { return n % 2 != 0; };
 
---- Returns true if n is odd.
-func is_odd(i: n -> b) {
-    return n % 2 != 0;
-};
-
---- Returns true if n is divisible by d.
 func is_divisible(i: n, i: d -> b) {
     if (d == 0) then;
-        halt.error >! "is_divisible: divisor is zero";
+        halt.error >! "is_divisible: zero divisor";
         return false;
     end;
     return n % d == 0;
 };
 
---- Returns the sum of all decimal digits of n.
 func digits_sum(i: n -> i) {
     i: v = abs_i(n);
     i: s = 0;
@@ -616,19 +591,14 @@ func digits_sum(i: n -> i) {
     return s;
 };
 
---- Returns the number of decimal digits in n.
 func count_digits(i: n -> i) {
     if (n == 0) then; return 1; end;
     i: v = abs_i(n);
     i: c = 0;
-    while (v > 0) do;
-        v = v / 10;
-        c = c + 1;
-    end;
+    while (v > 0) do; v = v / 10; c = c + 1; end;
     return c;
 };
 
---- Returns the integer with its digits reversed (e.g. 123 -> 321).
 func reverse_int(i: n -> i) {
     b: neg = (n < 0);
     i: v = abs_i(n);
@@ -641,21 +611,14 @@ func reverse_int(i: n -> i) {
     return r;
 };
 
---- Returns true if n reads the same forwards and backwards.
 func is_palindrome_int(i: n -> b) {
     if (n < 0) then; return false; end;
     return n == reverse_int(n);
 };
 
---- ================================================================
----   [8]
----   ___  _        _   _     _   _          
----  / __|| |_ __ _| |_(_)___| |_(_)__ ___  
----  \__ \|  _/ _` |  _| (_-<  _| / _(_-<  
----  |___/ \__\__,_|\__|_/__/\__|_\__/__/   
+--- [8] Statistics
 --- ================================================================
 
---- Returns the sum of all elements in an float array.
 func sum_arr(array:f: arr -> f) {
     f: s = 0.0;
     i: k = 0;
@@ -668,7 +631,6 @@ func sum_arr(array:f: arr -> f) {
     return s;
 };
 
---- Returns the sum of all elements in an integer array.
 func sum_arr_i(array:i: arr -> i) {
     i: s = 0;
     i: k = 0;
@@ -679,23 +641,19 @@ func sum_arr_i(array:i: arr -> i) {
     return s;
 };
 
---- Returns the arithmetic mean of the array.
 func mean(array:f: arr -> f) {
     i: n = arr.size();
     if (n == 0) then;
         halt.error >! "mean: empty array";
         return 0.0;
     end;
-    f: s = sum_arr(arr);
-    f: result = s / f(n);
-    return result;
+    return sum_arr(arr) / f(n);
 };
 
---- Returns the population variance of the array.
 func variance(array:f: arr -> f) {
     i: n = arr.size();
     if (n < 2) then;
-        halt.error >! "variance: at least 2 elements required";
+        halt.error >! "variance: need at least 2 elements";
         return 0.0;
     end;
     f: m   = mean(arr);
@@ -709,12 +667,33 @@ func variance(array:f: arr -> f) {
     return acc / f(n);
 };
 
---- Returns the population standard deviation of the array.
+--- Sample variance (Bessel's correction, divides by n-1).
+func variance_sample(array:f: arr -> f) {
+    i: n = arr.size();
+    if (n < 2) then;
+        halt.error >! "variance_sample: need at least 2 elements";
+        return 0.0;
+    end;
+    f: m   = mean(arr);
+    f: acc = 0.0;
+    i: k   = 0;
+    while (k < n) do;
+        f: diff = arr.get(k) - m;
+        acc = acc + diff * diff;
+        k = k + 1;
+    end;
+    return acc / f(n - 1);
+};
+
 func std_dev(array:f: arr -> f) {
     return sqrt_f(variance(arr));
 };
 
---- Returns the minimum value in the array.
+--- Sample standard deviation.
+func std_dev_sample(array:f: arr -> f) {
+    return sqrt_f(variance_sample(arr));
+};
+
 func min_arr(array:f: arr -> f) {
     i: n = arr.size();
     if (n == 0) then;
@@ -731,7 +710,6 @@ func min_arr(array:f: arr -> f) {
     return m;
 };
 
---- Returns the maximum value in the array.
 func max_arr(array:f: arr -> f) {
     i: n = arr.size();
     if (n == 0) then;
@@ -748,12 +726,10 @@ func max_arr(array:f: arr -> f) {
     return m;
 };
 
---- Returns max - min of the array.
 func range_arr(array:f: arr -> f) {
     return max_arr(arr) - min_arr(arr);
 };
 
---- Returns the median of the array (sorts a copy in-place).
 func median(array:f: arr -> f) {
     i: n = arr.size();
     if (n == 0) then;
@@ -761,16 +737,40 @@ func median(array:f: arr -> f) {
         return 0.0;
     end;
     arr.sort();
-    if (n % 2 == 1) then;
-        return arr.get(n / 2);
-    end;
+    if (n % 2 == 1) then; return arr.get(n / 2); end;
     return (arr.get(n / 2 - 1) + arr.get(n / 2)) / 2.0;
 };
 
---- Returns the dot product of two equal-length float arrays.
+--- Returns the weighted mean: sum(w_i * x_i) / sum(w_i).
+func weighted_mean(array:f: vals, array:f: weights -> f) {
+    if (vals.size() != weights.size()) then;
+        halt.error >! "weighted_mean: arrays must be same length";
+        return 0.0;
+    end;
+    i: n = vals.size();
+    if (n == 0) then;
+        halt.error >! "weighted_mean: empty arrays";
+        return 0.0;
+    end;
+    f: wsum = 0.0;
+    f: vsum = 0.0;
+    i: k = 0;
+    while (k < n) do;
+        f: w = weights.get(k);
+        wsum = wsum + w;
+        vsum = vsum + vals.get(k) * w;
+        k = k + 1;
+    end;
+    if (abs_f(wsum) < EPSILON) then;
+        halt.error >! "weighted_mean: sum of weights is zero";
+        return 0.0;
+    end;
+    return vsum / wsum;
+};
+
 func dot_product(array:f: a, array:f: b -> f) {
     if (a.size() != b.size()) then;
-        halt.error >! "dot_product: arrays must have equal length";
+        halt.error >! "dot_product: arrays must be equal length";
         return 0.0;
     end;
     f: s = 0.0;
@@ -782,39 +782,207 @@ func dot_product(array:f: a, array:f: b -> f) {
     return s;
 };
 
---- Returns the Euclidean norm (magnitude) of a vector.
 func norm_vec(array:f: v -> f) {
     return sqrt_f(dot_product(v, v));
 };
 
+--- Returns Pearson correlation coefficient between two arrays.
+func correlation(array:f: x, array:f: y -> f) {
+    i: n = x.size();
+    if (n != y.size() OR n < 2) then;
+        halt.error >! "correlation: arrays must be equal length >= 2";
+        return 0.0;
+    end;
+    f: mx = mean(x);
+    f: my = mean(y);
+    f: num = 0.0;
+    f: dxa = 0.0;
+    f: dya = 0.0;
+    i: k = 0;
+    while (k < n) do;
+        f: dx = x.get(k) - mx;
+        f: dy = y.get(k) - my;
+        num = num + dx * dy;
+        dxa = dxa + dx * dx;
+        dya = dya + dy * dy;
+        k = k + 1;
+    end;
+    f: denom = sqrt_f(dxa * dya);
+    if (abs_f(denom) < EPSILON) then;
+        halt.error >! "correlation: zero variance in input";
+        return 0.0;
+    end;
+    return num / denom;
+};
+
+--- [9] Unit Converters
 --- ================================================================
----   [9]
----    ___                        _                 
----   / __|___ _ ___ _____ _ _  | |_ ___ _ _ ___  
----  | (__/ _ \ ' \ V / -_) '_| |  _/ -_) '_(_-<  
----   \___\___/_||_\_/\___|_|    \__\___|_| /__/  
---- ================================================================
 
---- Distance
-func km_to_miles(f: km -> f) { return km  * 0.621371; };
-func miles_to_km(f: mi -> f) { return mi  * 1.609344; };
-func m_to_ft(f: m  -> f)     { return m   * 3.280840; };
-func ft_to_m(f: ft -> f)     { return ft  * 0.304800; };
+func km_to_miles(f: km  -> f) { return km  * 0.621371; };
+func miles_to_km(f: mi  -> f) { return mi  * 1.609344; };
+func m_to_ft(f: m       -> f) { return m   * 3.280840; };
+func ft_to_m(f: ft      -> f) { return ft  * 0.304800; };
+func cm_to_in(f: cm     -> f) { return cm  * 0.393701; };
+func in_to_cm(f: inches -> f) { return inches * 2.54;  };
 
---- Weight
-func kg_to_lbs(f: kg  -> f) { return kg  * 2.204623; };
-func lbs_to_kg(f: lbs -> f) { return lbs * 0.453592; };
+func kg_to_lbs(f: kg    -> f) { return kg  * 2.204623; };
+func lbs_to_kg(f: lbs   -> f) { return lbs * 0.453592; };
+func g_to_oz(f: g       -> f) { return g   * 0.035274; };
+func oz_to_g(f: oz      -> f) { return oz  * 28.34952; };
 
---- Temperature
-func celsius_to_f(f: c    -> f) { return c * 9.0 / 5.0 + 32.0;      };
+func celsius_to_f(f: c       -> f) { return c * 9.0 / 5.0 + 32.0;      };
 func fahrenheit_to_c(f: fahr -> f) { return (fahr - 32.0) * 5.0 / 9.0; };
-func celsius_to_k(f: c    -> f) { return c + 273.15;                  };
-func kelvin_to_c(f: k     -> f) { return k - 273.15;                  };
+func celsius_to_k(f: c       -> f) { return c + 273.15;                 };
+func kelvin_to_c(f: k        -> f) { return k - 273.15;                 };
 
---- Volume
 func liters_to_gal(f: l -> f) { return l * 0.264172; };
 func gal_to_liters(f: g -> f) { return g * 3.785412; };
+func ml_to_fl_oz(f: ml  -> f) { return ml  * 0.033814; };
+func fl_oz_to_ml(f: foz -> f) { return foz * 29.5735; };
+
+--- Speed
+func mps_to_kph(f: mps  -> f) { return mps  * 3.6;       };
+func kph_to_mps(f: kph  -> f) { return kph  / 3.6;       };
+func kph_to_mph(f: kph  -> f) { return kph  * 0.621371;  };
+func mph_to_kph(f: mph  -> f) { return mph  * 1.609344;  };
+
+--- Data
+func bytes_to_kb(f: b -> f) { return b  / 1024.0;       };
+func kb_to_mb(f: kb     -> f) { return kb / 1024.0;      };
+func mb_to_gb(f: mb     -> f) { return mb / 1024.0;      };
+
+--- [10] Geometry
+--- ================================================================
+
+--- Circle area.
+func circle_area(f: r -> f) {
+    f: r2 = r * r;
+    return PI * r2;
+};
+
+--- Circle circumference.
+func circle_circumference(f: r -> f) {
+    return TAU * r;
+};
+
+--- Rectangle area.
+func rect_area(f: w, f: h -> f) {
+    return w * h;
+};
+
+--- Rectangle perimeter.
+func rect_perimeter(f: w, f: h -> f) {
+    return 2.0 * (w + h);
+};
+
+--- Triangle area from base and height.
+func triangle_area(f: base, f: height -> f) {
+    return 0.5 * base * height;
+};
+
+--- Triangle area from three sides (Heron's formula).
+func triangle_area_heron(f: a, f: b, f: c -> f) {
+    f: s = (a + b + c) / 2.0;
+    f: v = s * (s - a) * (s - b) * (s - c);
+    if (v < 0.0) then;
+        halt.error >! "triangle_area_heron: invalid triangle sides";
+        return 0.0;
+    end;
+    return sqrt_f(v);
+};
+
+--- Sphere volume.
+func sphere_volume(f: r -> f) {
+    f: r2 = r * r;
+    f: r3 = r2 * r;
+    return (4.0 / 3.0) * PI * r3;
+};
+
+--- Sphere surface area.
+func sphere_surface(f: r -> f) {
+    f: r2 = r * r;
+    return 4.0 * PI * r2;
+};
+
+--- Cylinder volume.
+func cylinder_volume(f: r, f: h -> f) {
+    f: r2 = r * r;
+    return PI * r2 * h;
+};
+
+--- Euclidean distance between two 2D points.
+func dist2d(f: x1, f: y1, f: x2, f: y2 -> f) {
+    return hypot(x2 - x1, y2 - y1);
+};
+
+--- Euclidean distance between two 3D points.
+func dist3d(f: x1, f: y1, f: z1, f: x2, f: y2, f: z2 -> f) {
+    return hypot3(x2 - x1, y2 - y1, z2 - z1);
+};
+
+--- [11] Combinatorics
+--- ================================================================
+
+--- Returns the number of derangements D(n): permutations with no fixed points.
+func derangements(i: n -> i) {
+    if (n == 0) then; return 1; end;
+    if (n == 1) then; return 0; end;
+    i: a = 1;
+    i: b = 0;
+    i: k = 2;
+    while (k <= n) do;
+        i: c = (k - 1) * (a + b);
+        a = b;
+        b = c;
+        k = k + 1;
+    end;
+    return b;
+};
+
+--- Returns Catalan number C(n).
+func catalan(i: n -> i) {
+    return combinations(2 * n, n) / (n + 1);
+};
+
+--- Returns the number of surjections from n elements to k elements.
+func surjections(i: n, i: k -> i) {
+    if (k > n) then; return 0; end;
+    i: result = 0;
+    i: j = 0;
+    while (j <= k) do;
+        i: term = combinations(k, j) * pow_i(k - j, n);
+        if (j % 2 == 0) then;
+            result = result + term;
+        else;
+            result = result - term;
+        end;
+        j = j + 1;
+    end;
+    return result;
+};
+
+--- [12] Bit Operations
+--- ================================================================
+
+--- Returns true if n is a power of two.
+func is_pow2(i: n -> b) {
+    if (n <= 0) then; return false; end;
+    return n % 2 == 0 AND (n / 2) % 2 == 0 OR n == 1 OR n == 2 OR n == 4 OR n == 8 OR n == 16 OR n == 32 OR n == 64 OR n == 128 OR n == 256 OR n == 512 OR n == 1024 OR n == 2048 OR n == 4096 OR n == 8192 OR n == 16384 OR n == 32768 OR n == 65536;
+};
+
+--- Returns the number of set bits (1s) in n (Brian Kernighan algorithm).
+func popcount(i: n -> i) {
+    i: v = abs_i(n);
+    i: c = 0;
+    while (v > 0) do;
+        v = v - (v - (v / 2) * 2) * 0;
+        i: bit = v % 2;
+        c = c + bit;
+        v = v / 2;
+    end;
+    return c;
+};
 
 --- ================================================================
----   END OF math.xcx
+---   END OF math.xcx  v2.0.0
 --- ================================================================

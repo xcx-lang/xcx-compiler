@@ -1,4 +1,4 @@
-XCX 3.0 — Runtime & Compiler
+XCX 3.1 — Runtime & Compiler
 
 XCX is an experimental backend programming language with a built-in runtime.
 This installer sets up the compiler and basic tooling on your system.
@@ -45,7 +45,7 @@ WHAT IS INCLUDED
 
 PROJECT STATUS
 
-XCX 3.0 is under active development.
+XCX 3.1 is under active development.
 
 - Suitable for: small tools, experiments, learning
 - Not suitable for: production systems

@@ -1,4 +1,4 @@
-# XCX Compiler — Documentation v3.0
+# XCX Compiler — Documentation v3.1
 
 > XCX language compiler implemented in Rust. Multi-stage pipeline: lexer → parser → semantic analysis → bytecode compiler → virtual machine → JIT (Cranelift).
 

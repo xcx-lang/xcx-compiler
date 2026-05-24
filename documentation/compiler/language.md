@@ -1,4 +1,4 @@
-# XCX Language Reference — v3.0
+# XCX Language Reference — v3.1
 
 > Complete reference of XCX language syntax and semantics.
 

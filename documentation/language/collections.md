@@ -1,5 +1,5 @@
 //==language/collections.md==\\
-# XCX 3.0 Collections
+# XCX 3.1 Collections
 
 ## Arrays
 

@@ -1,6 +1,6 @@
 # XCX Technical Documentation Suite
 
-Welcome to the official technical documentation for XCX 3.0 and the XCX Compiler.
+Welcome to the official technical documentation for XCX 3.1 and the XCX Compiler.
 
 ## 📖 Language Reference
 Comprehensive guides on the XCX language syntax and features.
@@ -38,4 +38,4 @@ Guides for the XCX ecosystem tools.
 - [PAX Manual](pax/pax_manual.md): Package management and project structure.
 
 ---
-*Documentation Version: 3.0.0 *
+*Documentation Version: 3.1.0 *

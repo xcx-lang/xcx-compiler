@@ -1,7 +1,7 @@
 # XCX Tracing JIT (Cranelift) — Documentation
 
 > **File:** `src/backend/jit.rs`  
-> XCX 3.0 includes a **dual-mode JIT** that automatically compiles both hot loops and frequently-called functions into native machine code using the [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift) framework.
+> XCX 3.1 includes a **dual-mode JIT** that automatically compiles both hot loops and frequently-called functions into native machine code using the [Cranelift](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift) framework.
 
 ---
 

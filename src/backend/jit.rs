@@ -144,11 +144,91 @@ impl JIT {
         }
 
 
+        let mut ops = trace.ops.clone();
         let has_loop = trace.ops.iter().any(|op| {
             matches!(op,
                 TraceOp::IncVarLoopNext   { .. } |
-                TraceOp::LoopNextInt      { .. })
+                TraceOp::IncLocalLoopNext { .. } |
+                TraceOp::LoopNextInt      { .. }) ||
+            match op {
+                TraceOp::Jump { target_ip } => *target_ip == trace.start_ip,
+                _ => false
+            }
         });
+
+        // Loop fusion for while loops:
+        // CmpInt (cc=3 or cc=5) at start, GuardTrue second.
+        // AddInt at len - 2, Jump backedge at len - 1.
+        if has_loop && ops.len() >= 4 {
+            let mut fused = false;
+            let mut reg = 0;
+            let mut limit_reg = 0;
+            let mut exit_ip = 0;
+            let mut target = 0;
+
+            let matches_cmp = match &ops[0] {
+                TraceOp::CmpInt { dst, src1, src2, cc } => {
+                    if *cc == 3 || *cc == 5 {
+                        reg = *src1;
+                        limit_reg = *src2;
+                        Some(*dst)
+                    } else {
+                        None
+                    }
+                }
+                _ => None
+            };
+
+            if let Some(cmp_dst) = matches_cmp {
+                let matches_guard = match &ops[1] {
+                    TraceOp::GuardTrue { reg: g_reg, fail_ip } => {
+                        if *g_reg == cmp_dst {
+                            exit_ip = *fail_ip;
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false
+                };
+
+                if matches_guard {
+                    let last_idx = ops.len() - 1;
+                    let matches_jump = match &ops[last_idx] {
+                        TraceOp::Jump { target_ip } => {
+                            if *target_ip == trace.start_ip {
+                                target = *target_ip;
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false
+                    };
+
+                    if matches_jump {
+                        let matches_inc = match &ops[last_idx - 1] {
+                            TraceOp::AddInt { dst: add_dst, src1: add_src1, src2: _ } => {
+                                *add_dst == reg && *add_src1 == reg
+                            }
+                            _ => false
+                        };
+
+                        if matches_inc {
+                            fused = true;
+                        }
+                    }
+                }
+            }
+
+            if fused {
+                ops.remove(0); // remove CmpInt
+                ops.remove(0); // remove GuardTrue
+                let l = ops.len();
+                ops.remove(l - 2); // remove AddInt
+                ops[l - 2] = TraceOp::LoopNextInt { reg, limit_reg, target: target as u32, exit_ip };
+            }
+        }
 
         let loop_header: Option<Block> = if has_loop { Some(b.create_block()) } else { None };
 
@@ -195,9 +275,61 @@ impl JIT {
             }};
         }
 
-        for op in &trace.ops {
+        let mut reg_constants: std::collections::HashMap<u8, i64> = std::collections::HashMap::new();
+
+        for op in &ops {
             if current_terminated { break; }
             if has_loop { ensure_loop_started!(); }
+
+            // Clear any overwritten registers to ensure constant safety
+            match op {
+                TraceOp::LoadConst { dst, .. } |
+                TraceOp::Move { dst, .. } |
+                TraceOp::GetVar { dst, .. } |
+                TraceOp::AddInt { dst, .. } |
+                TraceOp::SubInt { dst, .. } |
+                TraceOp::MulInt { dst, .. } |
+                TraceOp::DivInt { dst, .. } |
+                TraceOp::ModInt { dst, .. } |
+                TraceOp::AddFloat { dst, .. } |
+                TraceOp::SubFloat { dst, .. } |
+                TraceOp::MulFloat { dst, .. } |
+                TraceOp::DivFloat { dst, .. } |
+                TraceOp::ModFloat { dst, .. } |
+                TraceOp::CmpInt { dst, .. } |
+                TraceOp::CmpFloat { dst, .. } |
+                TraceOp::CastIntToFloat { dst, .. } |
+                TraceOp::And { dst, .. } |
+                TraceOp::Or { dst, .. } |
+                TraceOp::Not { dst, .. } |
+                TraceOp::RandomInt { dst, .. } |
+                TraceOp::RandomFloat { dst, .. } |
+                TraceOp::PowInt { dst, .. } |
+                TraceOp::PowFloat { dst, .. } |
+                TraceOp::IntConcat { dst, .. } |
+                TraceOp::Has { dst, .. } |
+                TraceOp::RandomChoice { dst, .. } |
+                TraceOp::ArraySize { dst, .. } |
+                TraceOp::ArrayGet { dst, .. } |
+                TraceOp::SetSize { dst, .. } |
+                TraceOp::SetContains { dst, .. } => {
+                    reg_constants.remove(dst);
+                }
+                TraceOp::IncLocal { reg } => {
+                    reg_constants.remove(reg);
+                }
+                TraceOp::LoopNextInt { reg, .. } => {
+                    reg_constants.remove(reg);
+                }
+                TraceOp::IncVarLoopNext { reg, .. } => {
+                    reg_constants.remove(reg);
+                }
+                TraceOp::IncLocalLoopNext { inc_reg, reg, .. } => {
+                    reg_constants.remove(inc_reg);
+                    reg_constants.remove(reg);
+                }
+                _ => {}
+            }
 
             match op {
 
@@ -205,6 +337,15 @@ impl JIT {
                     let bits = b.ins().iconst(types::I64, val.0 as i64);
                     let addr = b.ins().iadd_imm(locals_ptr, (*dst as i64) * 8);
                     b.ins().store(trusted(), bits, addr, 0);
+
+                    if val.is_int() {
+                        reg_constants.insert(*dst, val.as_i64());
+                    } else if val.is_float() {
+                        let f = val.as_f64();
+                        if f == f.trunc() {
+                            reg_constants.insert(*dst, f as i64);
+                        }
+                    }
                 }
 
                 TraceOp::Move { dst, src } => {
@@ -212,6 +353,10 @@ impl JIT {
                     let sv = b.ins().load(types::I64, trusted(), sa, 0);
                     let da = b.ins().iadd_imm(locals_ptr, (*dst as i64) * 8);
                     b.ins().store(trusted(), sv, da, 0);
+
+                    if let Some(&c) = reg_constants.get(src) {
+                        reg_constants.insert(*dst, c);
+                    }
                 }
 
                 TraceOp::GetVar { dst, idx } => {
@@ -355,11 +500,23 @@ impl JIT {
                 TraceOp::AddInt { dst, src1, src2 } => {
                     let la = b.ins().iadd_imm(locals_ptr, (*src1 as i64) * 8);
                     let lv = b.ins().load(types::I64, trusted(), la, 0);
-                    let ra = b.ins().iadd_imm(locals_ptr, (*src2 as i64) * 8);
-                    let rv = b.ins().load(types::I64, trusted(), ra, 0);
                     let l  = unpack_int!(lv);
-                    let r  = if src1 == src2 { l } else { unpack_int!(rv) };
-                    let s  = b.ins().iadd(l, r);
+                    let (s1_v, s2_v) = if let Some(&c) = reg_constants.get(src2) {
+                        let r_c = b.ins().iconst(types::I64, c);
+                        (l, r_c)
+                    } else if let Some(&c) = reg_constants.get(src1) {
+                        let ra = b.ins().iadd_imm(locals_ptr, (*src2 as i64) * 8);
+                        let rv = b.ins().load(types::I64, trusted(), ra, 0);
+                        let r  = unpack_int!(rv);
+                        let l_c = b.ins().iconst(types::I64, c);
+                        (l_c, r)
+                    } else {
+                        let ra = b.ins().iadd_imm(locals_ptr, (*src2 as i64) * 8);
+                        let rv = b.ins().load(types::I64, trusted(), ra, 0);
+                        let r  = if src1 == src2 { l } else { unpack_int!(rv) };
+                        (l, r)
+                    };
+                    let s  = b.ins().iadd(s1_v, s2_v);
                     let sb = pack_int!(s);
                     let da = b.ins().iadd_imm(locals_ptr, (*dst as i64) * 8);
                     b.ins().store(trusted(), sb, da, 0);
@@ -368,11 +525,23 @@ impl JIT {
                 TraceOp::SubInt { dst, src1, src2 } => {
                     let la = b.ins().iadd_imm(locals_ptr, (*src1 as i64) * 8);
                     let lv = b.ins().load(types::I64, trusted(), la, 0);
-                    let ra = b.ins().iadd_imm(locals_ptr, (*src2 as i64) * 8);
-                    let rv = b.ins().load(types::I64, trusted(), ra, 0);
                     let l  = unpack_int!(lv);
-                    let r  = if src1 == src2 { l } else { unpack_int!(rv) };
-                    let s  = b.ins().isub(l, r);
+                    let (s1_v, s2_v) = if let Some(&c) = reg_constants.get(src2) {
+                        let r_c = b.ins().iconst(types::I64, c);
+                        (l, r_c)
+                    } else if let Some(&c) = reg_constants.get(src1) {
+                        let ra = b.ins().iadd_imm(locals_ptr, (*src2 as i64) * 8);
+                        let rv = b.ins().load(types::I64, trusted(), ra, 0);
+                        let r  = unpack_int!(rv);
+                        let l_c = b.ins().iconst(types::I64, c);
+                        (l_c, r)
+                    } else {
+                        let ra = b.ins().iadd_imm(locals_ptr, (*src2 as i64) * 8);
+                        let rv = b.ins().load(types::I64, trusted(), ra, 0);
+                        let r  = if src1 == src2 { l } else { unpack_int!(rv) };
+                        (l, r)
+                    };
+                    let s  = b.ins().isub(s1_v, s2_v);
                     let sb = pack_int!(s);
                     let da = b.ins().iadd_imm(locals_ptr, (*dst as i64) * 8);
                     b.ins().store(trusted(), sb, da, 0);
@@ -381,11 +550,23 @@ impl JIT {
                 TraceOp::MulInt { dst, src1, src2 } => {
                     let la = b.ins().iadd_imm(locals_ptr, (*src1 as i64) * 8);
                     let lv = b.ins().load(types::I64, trusted(), la, 0);
-                    let ra = b.ins().iadd_imm(locals_ptr, (*src2 as i64) * 8);
-                    let rv = b.ins().load(types::I64, trusted(), ra, 0);
                     let l  = unpack_int!(lv);
-                    let r  = if src1 == src2 { l } else { unpack_int!(rv) };
-                    let s  = b.ins().imul(l, r);
+                    let (s1_v, s2_v) = if let Some(&c) = reg_constants.get(src2) {
+                        let r_c = b.ins().iconst(types::I64, c);
+                        (l, r_c)
+                    } else if let Some(&c) = reg_constants.get(src1) {
+                        let ra = b.ins().iadd_imm(locals_ptr, (*src2 as i64) * 8);
+                        let rv = b.ins().load(types::I64, trusted(), ra, 0);
+                        let r  = unpack_int!(rv);
+                        let l_c = b.ins().iconst(types::I64, c);
+                        (l_c, r)
+                    } else {
+                        let ra = b.ins().iadd_imm(locals_ptr, (*src2 as i64) * 8);
+                        let rv = b.ins().load(types::I64, trusted(), ra, 0);
+                        let r  = if src1 == src2 { l } else { unpack_int!(rv) };
+                        (l, r)
+                    };
+                    let s  = b.ins().imul(s1_v, s2_v);
                     let sb = pack_int!(s);
                     let da = b.ins().iadd_imm(locals_ptr, (*dst as i64) * 8);
                     b.ins().store(trusted(), sb, da, 0);
@@ -425,16 +606,32 @@ impl JIT {
                 TraceOp::ModInt { dst, src1, src2, fail_ip } => {
                     let la = b.ins().iadd_imm(locals_ptr, (*src1 as i64) * 8);
                     let lv = b.ins().load(types::I64, trusted(), la, 0);
-                    let ra = b.ins().iadd_imm(locals_ptr, (*src2 as i64) * 8);
-                    let rv = b.ins().load(types::I64, trusted(), ra, 0);
                     let l  = unpack_int!(lv);
-                    let r  = if src1 == src2 { l } else { unpack_int!(rv) };
 
-                    let is_zero = b.ins().icmp_imm(IntCC::Equal, r, 0);
-                    let is_min  = b.ins().icmp_imm(IntCC::Equal, l, i64::MIN);
-                    let is_minus_one = b.ins().icmp_imm(IntCC::Equal, r, -1);
-                    let is_overflow = b.ins().band(is_min, is_minus_one);
-                    let should_fail = b.ins().bor(is_zero, is_overflow);
+                    let (_is_zero, _is_min, _is_minus_one, _is_overflow, should_fail, s) = if let Some(&c) = reg_constants.get(src2) {
+                        let r_c = b.ins().iconst(types::I64, c);
+                        let is_zero = b.ins().iconst(types::I8, if c == 0 { 1 } else { 0 });
+                        let is_min  = b.ins().icmp_imm(IntCC::Equal, l, i64::MIN);
+                        let is_minus_one = b.ins().iconst(types::I8, if c == -1 { 1 } else { 0 });
+                        let is_overflow = b.ins().band(is_min, is_minus_one);
+                        let should_fail = b.ins().bor(is_zero, is_overflow);
+                        
+                        let s = b.ins().srem(l, r_c);
+                        (is_zero, is_min, is_minus_one, is_overflow, should_fail, s)
+                    } else {
+                        let ra = b.ins().iadd_imm(locals_ptr, (*src2 as i64) * 8);
+                        let rv = b.ins().load(types::I64, trusted(), ra, 0);
+                        let r  = if src1 == src2 { l } else { unpack_int!(rv) };
+
+                        let is_zero = b.ins().icmp_imm(IntCC::Equal, r, 0);
+                        let is_min  = b.ins().icmp_imm(IntCC::Equal, l, i64::MIN);
+                        let is_minus_one = b.ins().icmp_imm(IntCC::Equal, r, -1);
+                        let is_overflow = b.ins().band(is_min, is_minus_one);
+                        let should_fail = b.ins().bor(is_zero, is_overflow);
+                        
+                        let s = b.ins().srem(l, r);
+                        (is_zero, is_min, is_minus_one, is_overflow, should_fail, s)
+                    };
 
                     let fail = b.create_block();
                     let ok   = b.create_block();
@@ -447,7 +644,7 @@ impl JIT {
 
                     b.switch_to_block(ok);
                     b.seal_block(ok);
-                    let s = b.ins().srem(l, r);
+
                     let sb = pack_int!(s);
                     let da = b.ins().iadd_imm(locals_ptr, (*dst as i64) * 8);
                     b.ins().store(trusted(), sb, da, 0);
@@ -977,7 +1174,22 @@ impl JIT {
                     emit_loop_exit!(cond, *target, *exit_ip);
                 }
 
-                _ => { /* unknown op — recording should have filtered this */ }
+                TraceOp::Jump { target_ip } => {
+                    if let Some(lh) = loop_header {
+                        if *target_ip == trace.start_ip {
+                            b.ins().jump(lh, no_args!());
+                            current_terminated = true;
+                        } else {
+                            let rv = b.ins().iconst(types::I32, *target_ip as i64);
+                            b.ins().return_(&[rv]);
+                            current_terminated = true;
+                        }
+                    } else {
+                        let rv = b.ins().iconst(types::I32, *target_ip as i64);
+                        b.ins().return_(&[rv]);
+                        current_terminated = true;
+                    }
+                }
             }
         }
 
@@ -1024,6 +1236,7 @@ impl JIT {
         }
     }
 
+    #[allow(dead_code)]
     pub fn compile_method(&mut self, func_id_idx: usize, chunk: &crate::backend::vm::FunctionChunk, constants: &[VMValue]) -> Result<*const u8, String> {
         self.module.clear_context(&mut self.ctx);
 
@@ -1472,30 +1685,27 @@ impl JIT {
                     b.ins().call(local_callee, &[dst_v, kind_v, rv, args_p, acount_v, locals_ptr, _executor_ptr]);
                 }
                 crate::backend::vm::OpCode::Call { dst, func_idx, base, arg_count } => {
-                    if (*func_idx as usize) == func_id_idx {
-                        let params_ptr = b.ins().iadd_imm(locals_ptr, (*base as i64) * 8);
-                        
-                        let mut sig = self.module.make_signature();
-                        sig.params.push(AbiParam::new(types::I64)); // func_id_idx
-                        sig.params.push(AbiParam::new(ptr_type));   // params_ptr
-                        sig.params.push(AbiParam::new(types::I8));    // params_count
-                        sig.params.push(AbiParam::new(ptr_type));   // vm_ptr
-                        sig.params.push(AbiParam::new(ptr_type));   // executor_ptr
-                        sig.params.push(AbiParam::new(ptr_type));   // globals_ptr
-                        sig.returns.push(AbiParam::new(types::I64)); // result bits
-                        
-                        let callee = self.module.declare_function("xcx_jit_call_recursive", Linkage::Import, &sig).unwrap();
-                        let local_callee = self.module.declare_func_in_func(callee, &mut b.func);
-                        
-                        let fid_v = b.ins().iconst(types::I64, func_id_idx as i64);
-                        let pcount_v = b.ins().iconst(types::I8, *arg_count as i64);
-                        
-                        let call_inst = b.ins().call(local_callee, &[fid_v, params_ptr, pcount_v, _vm_ptr, _executor_ptr, globals_ptr]);
-                        let res_v = b.inst_results(call_inst)[0];
-                        let da = b.ins().iadd_imm(locals_ptr, (*dst as i64) * 8);
-                        b.ins().store(trusted(), res_v, da, 0);
-                    } else {
-                    }
+                    let params_ptr = b.ins().iadd_imm(locals_ptr, (*base as i64) * 8);
+                    
+                    let mut sig = self.module.make_signature();
+                    sig.params.push(AbiParam::new(types::I64)); // func_id_idx
+                    sig.params.push(AbiParam::new(ptr_type));   // params_ptr
+                    sig.params.push(AbiParam::new(types::I8));    // params_count
+                    sig.params.push(AbiParam::new(ptr_type));   // vm_ptr
+                    sig.params.push(AbiParam::new(ptr_type));   // executor_ptr
+                    sig.params.push(AbiParam::new(ptr_type));   // globals_ptr
+                    sig.returns.push(AbiParam::new(types::I64)); // result bits
+                    
+                    let callee = self.module.declare_function("xcx_jit_call_recursive", Linkage::Import, &sig).unwrap();
+                    let local_callee = self.module.declare_func_in_func(callee, &mut b.func);
+                    
+                    let fid_v = b.ins().iconst(types::I64, *func_idx as i64);
+                    let pcount_v = b.ins().iconst(types::I8, *arg_count as i64);
+                    
+                    let call_inst = b.ins().call(local_callee, &[fid_v, params_ptr, pcount_v, _vm_ptr, _executor_ptr, globals_ptr]);
+                    let res_v = b.inst_results(call_inst)[0];
+                    let da = b.ins().iadd_imm(locals_ptr, (*dst as i64) * 8);
+                    b.ins().store(trusted(), res_v, da, 0);
                 }
                 crate::backend::vm::OpCode::Return { src } => {
                     let sa = b.ins().iadd_imm(locals_ptr, (*src as i64) * 8);

@@ -1,4 +1,4 @@
-# XCX 3.0 I/O and System Commands
+# XCX 3.1 I/O and System Commands
 
 ## Console Output (`>!`)
 

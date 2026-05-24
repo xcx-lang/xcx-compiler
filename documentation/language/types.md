@@ -1,5 +1,4 @@
-//==language/types.md==\\
-# XCX 3.0 Data Types
+# XCX 3.1 Data Types
 
 ## Simple Types
 

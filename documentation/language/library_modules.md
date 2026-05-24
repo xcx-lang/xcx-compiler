@@ -1,4 +1,4 @@
-# XCX 3.0 Standard Library and Modules
+# XCX 3.1 Standard Library and Modules
 
 ## Built-in Modules
 

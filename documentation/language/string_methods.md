@@ -1,4 +1,4 @@
-# XCX 3.0 String Methods
+# XCX 3.1 String Methods
 
 String objects in XCX are immutable. Methods return a **new string** and do not modify the original.
 

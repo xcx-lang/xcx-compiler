@@ -1,8 +1,8 @@
 ; XCX Compiler Ecosystem - Inno Setup Script
-; Version: 3.0
+; Version: 3.1
 
 #define MyAppName "XCX Compiler Ecosystem"
-#define MyAppVersion "3.0"
+#define MyAppVersion "3.1"
 #define MyAppPublisher "XCX Team"
 #define MyAppExeName "xcx.exe"
 #define MyAppURL "https://xcx-team.example.com"
@@ -32,7 +32,7 @@ MinVersion=10.0
 LicenseFile={#SourcePath}\resources\LICENSE.txt
 InfoBeforeFile={#SourcePath}\resources\README.txt
 OutputDir={#SourcePath}\Output
-OutputBaseFilename=xcx-setup-v3.0
+OutputBaseFilename=xcx-setup-v3.1
 SetupIconFile={#SourcePath}\resources\icons\xcx.ico
 ; Sidebar image for wizard (164x314 px, BMP or PNG format)
 WizardImageFile={#SourcePath}\resources\wizard\wizard-sidebar.bmp
@@ -110,7 +110,7 @@ Source: "{#SourcePath}\resources\icons\pax.ico"; DestDir: "{app}";     Flags: ig
 Source: "{#SourcePath}\resources\LICENSE.txt";   DestDir: "{app}";     Flags: ignoreversion; Components: core
 Source: "{#SourcePath}\resources\README.txt";    DestDir: "{app}";     Flags: ignoreversion; Components: core
 
-; Remove old files from previous versions that no longer exist in v3.0
+; Remove old files from previous versions that no longer exist in v3.1
 ; Add files/folders removed between versions here
 [InstallDelete]
 Type: files;          Name: "{app}\bin\xcx-old.exe"

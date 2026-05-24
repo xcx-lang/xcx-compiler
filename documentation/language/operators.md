@@ -1,4 +1,4 @@
-# XCX 3.0 Operators
+# XCX 3.1 Operators
 
 ## Arithmetic Operators
 

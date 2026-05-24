@@ -41,7 +41,7 @@ fn main() {
     }
 
     if first_arg == "--version" || first_arg == "version" {
-        println!("xcx 3.0 ({}/{})", std::env::consts::OS, std::env::consts::ARCH);
+        println!("xcx 3.1 ({}/{})", std::env::consts::OS, std::env::consts::ARCH);
         return;
     }
 
@@ -86,7 +86,7 @@ fn run_file(filename: &str) {
         .unwrap_or(std::path::Path::new("."));
 
     let start_time = std::time::Instant::now();
-    let mut parser = Parser::new(&source);
+    let mut parser = Parser::new(&source).with_filename(filename);
     let program_raw = parser.parse_program();
     if parser.has_error {
         return;
@@ -115,7 +115,7 @@ fn run_file(filename: &str) {
     let errors = checker.check(&mut program, &mut symbols);
 
     if !errors.is_empty() {
-        let reporter = Reporter::new(&source);
+        let reporter = Reporter::new(&source).with_filename(filename);
         for err in &errors {
             reporter.error(err.span.line, err.span.col, err.span.len, &err.kind.to_diagnostic_message());
         }
@@ -126,6 +126,20 @@ fn run_file(filename: &str) {
 
     let mut compiler = Compiler::new();
     let (main_chunk, constants, functions) = compiler.compile(&program, &mut interner);
+    /*
+    {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::File::create("bytecode_dump.txt") {
+            for (i, func) in functions.iter().enumerate() {
+                let _ = writeln!(f, "--- FUNCTION {} BYTECODE ---", i);
+                for (ip, op) in func.bytecode.iter().enumerate() {
+                    let _ = writeln!(f, "{:04}: {:?}", ip, op);
+                }
+                let _ = writeln!(f, "------------------");
+            }
+        }
+    }
+    */
     let duration = start_time.elapsed();
     println!("[XCX] Compiled successfully in {:?}.", duration);
 

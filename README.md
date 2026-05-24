@@ -2,14 +2,14 @@
 
 ![Rust](https://img.shields.io/badge/built%20with-Rust-orange)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Version](https://img.shields.io/badge/version-3.0.0-brightgreen)
+![Version](https://img.shields.io/badge/version-3.1.0-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![GitHub Stars](https://img.shields.io/github/stars/xcx-lang/xcx-compiler?style=flat)
 ![GitHub Issues](https://img.shields.io/github/issues/xcx-lang/xcx-compiler)
 ![Last Commit](https://img.shields.io/github/last-commit/xcx-lang/xcx-compiler)
 ![Repo Size](https://img.shields.io/github/repo-size/xcx-lang/xcx-compiler)
 
-> XCX 3.0 is an active project under development. If you run into something unexpected, [open an issue](https://github.com/xcx-lang/xcx-compiler/issues). XCX 4.0 is planned with a redesigned architecture.
+> XCX 3.1 is an active project under development. If you run into something unexpected, [open an issue](https://github.com/xcx-lang/xcx-compiler/issues). XCX 4.0 is planned with a redesigned architecture.
 
 ---
 
@@ -19,7 +19,7 @@ Most backend languages make you choose between two bad options: high-level langu
 
 XCX is an experiment in a third path: a statically typed language where HTTP, SQLite, JSON, crypto, and file I/O are part of the language itself, not libraries you bolt on. No `package.json`. No ORM. No middleware boilerplate. You write logic; the runtime handles the rest.
 
-It started in December 2025 as a question — *can an AI generate a working language runtime from scratch?* — and went through a Python prototype, a C rewrite, and finally a Rust implementation that became XCX 3.0. One contributor so far. The architecture got complex along the way, which is why 4.0 is planned. But the core idea holds up.
+It started in December 2025 as a question — *can an AI generate a working language runtime from scratch?* — and went through a Python prototype, a C rewrite, and finally a Rust implementation that became XCX 3.1. One contributor so far. The architecture got complex along the way, which is why 4.0 is planned. But the core idea holds up.
 
 ---
 
@@ -104,7 +104,7 @@ XCX is not trying to replace Go or Node. It occupies a different space: small ba
 ## Performance (current state)
 
 Benchmarks run on Windows 11, Ryzen 5 5600X, 16GB RAM. XCX uses a register-based VM with a tracing JIT (Cranelift) that kicks in automatically on hot loops after ~50 iterations.
-> ⚠️ These benchmarks reflect the **current state of XCX 3.0**, not the target performance.
+> ⚠️ These benchmarks reflect the **current state of XCX 3.1**, not the target performance.
 > The runtime, VM, and JIT are still under active development and will change significantly.
 > 
 > The goal of this section is **transparency**, not competition.
@@ -121,7 +121,7 @@ Benchmarks run on Windows 11, Ryzen 5 5600X, 16GB RAM. XCX uses a register-based
 | Crystal | 90.9ms | 2.96ms | 0.29ms | N/A |
 | Node.js | 358.89ms | 6.54ms | 2.28ms | 8.12ms |
 | LuaJIT | 378ms | 9.1ms | 0.8ms | N/A |
-| **XCX 3.0** | **521ms** | **60ms** | **5ms** | **118ms** |
+| **XCX 3.1** | **520ms** | **45ms** | **5ms** | **118ms** |
 | PHP | 3219.35ms | 80.33ms | 4.21ms | 10.83ms |
 | Lua | 5766ms | 82.8ms | 7ms | N/A |
 | Python | 11094.20ms | 100.65ms | 3.72ms | 38.15ms |
@@ -129,7 +129,7 @@ Benchmarks run on Windows 11, Ryzen 5 5600X, 16GB RAM. XCX uses a register-based
 
 XCX is not yet performance-competitive with compiled languages in general workloads.
 
-Loop and Sieve are competitive. Fibonacci dropped from 601ms to 60ms after recent optimizations. JSON is slower than the scripting languages that have native JSON support, which is a known area for improvement. These numbers reflect the current 3.0 architecture.
+Loop and Sieve are competitive. Fibonacci dropped from 601ms to 60ms after recent optimizations. JSON is slower than the scripting languages that have native JSON support, which is a known area for improvement. These numbers reflect the current 3.1 architecture.
 
 ---
 
@@ -197,7 +197,7 @@ The 3.x line is not planned for new language features. Focus is on:
 - Native fiber scoping fix (the Windows workaround goes away)
 - Improved JIT coverage, including function calls
 - Cross-platform support (Linux, macOS)
-- No planned changes to XCX language syntax — 3.0 code should continue to work
+- No planned changes to XCX language syntax — 3.1 code should continue to work
 
 ---
 
@@ -260,7 +260,7 @@ xcx server.xcx
 
 **Terminal + interactive input** — raw mode, cursor control, non-blocking key input. Enough to build games, editors, and CLI tools.
 
-**PAX package manager** — `xcx pax install pkg`. Own registry, preview in 3.0.
+**PAX package manager** — `xcx pax install pkg`. Own registry, preview in 3.1.
 
 ---
 

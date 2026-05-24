@@ -161,7 +161,7 @@ fn run_sql_file(filename: &str) -> Arc<VM> {
         let _vm = run_source_with_dir(&source, Some(dir.clone()));
     }
     
-    // Cleanup the specific .db file if identified - XCX 3.0 creates these in the project root
+    // Cleanup the specific .db file if identified - XCX 3.1 creates these in the project root
     if let Some(db) = db_path {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let db_file = root.join(&db);

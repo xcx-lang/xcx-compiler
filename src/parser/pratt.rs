@@ -12,6 +12,7 @@ pub struct Parser<'a> {
     peek: Token,
     previous: Token,
     pub has_error: bool,
+    pub filename: Option<String>,
 }
 
 #[derive(Debug, PartialOrd, PartialEq, Clone, Copy)]
@@ -51,11 +52,20 @@ impl<'a> Parser<'a> {
             peek,
             previous,
             has_error: false,
+            filename: None,
         }
     }
 
+    pub fn with_filename(mut self, filename: &str) -> Self {
+        self.filename = Some(filename.to_string());
+        self
+    }
+
     fn error(&mut self, message: &str) {
-        let reporter = crate::diagnostic::report::Reporter::new(self.source);
+        let mut reporter = crate::diagnostic::report::Reporter::new(self.source);
+        if let Some(ref f) = self.filename {
+            reporter = reporter.with_filename(f);
+        }
         reporter.error(self.current.span.line, self.current.span.col, self.current.span.len, message);
         self.has_error = true;
     }
@@ -76,6 +86,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[allow(dead_code)]
     fn expect(&mut self, kind: TokenKind, message: &str) -> bool {
         if self.current.kind == kind {
             self.advance();

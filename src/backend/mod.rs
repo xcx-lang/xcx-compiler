@@ -31,18 +31,16 @@ pub struct CompileContext<'a> {
 
 impl<'a> CompileContext<'a> {
     pub fn add_constant(&mut self, val: Value) -> u32 {
+        if let Some(pos) = self.constants.iter().position(|&x| x == val) {
+            return pos as u32;
+        }
+        let idx = self.constants.len();
         if val.is_string() {
             let s = val.as_string();
-            if let Some(&idx) = self.string_constants.get(s.as_ref()) {
-                return idx as u32;
-            }
-            let idx = self.constants.len();
             self.string_constants.insert((*s).clone(), idx);
-            self.constants.push(val);
-            return idx as u32;
         }
         self.constants.push(val);
-        (self.constants.len() - 1) as u32
+        idx as u32
     }
 }
 
@@ -88,7 +86,7 @@ impl FunctionCompiler {
         self.scopes.pop();
     }
 
-       pub fn lookup_local(&mut self, id: &StringId) -> Option<usize> {
+    pub fn lookup_local(&mut self, id: &StringId) -> Option<usize> {
         for scope in self.scopes.iter().rev() {
             if let Some(&slot) = scope.get(id) {
                 return Some(slot);
@@ -416,7 +414,6 @@ impl FunctionCompiler {
                             self.emit(OpCode::Call { dst, func_idx: fid as u32, base, arg_count }, &expr.span);
                         }
                     } else {
-                        // Dynamic call? Not supported yet in 2.2, but we can emit a placeholder
                         self.emit(OpCode::Halt, &expr.span);
                     }
                     self.next_local = (base + 1) as usize;
@@ -451,7 +448,7 @@ impl FunctionCompiler {
                         self.emit(OpCode::LoadConst { dst: h_reg, idx: h_idx }, &expr.span);
                         (step_reg, h_reg)
                     } else {
-                        let dummy = self.push_reg(); // just to have something
+                        let dummy = self.push_reg(); 
                         let f_idx = ctx.add_constant(Value::from_bool(false));
                         let f_reg = self.push_reg();
                         self.emit(OpCode::LoadConst { dst: f_reg, idx: f_idx }, &expr.span);
@@ -692,8 +689,6 @@ impl FunctionCompiler {
 
                 if method_name == "where" && args.len() == 1 {
                     if !matches!(args[0].expr().kind, crate::parser::ast::ExprKind::Lambda { .. }) {
-                        // Special: Table.where() with shorthand predicate
-                        // Wrap the expression in a synthetic lambda: row -> <expression>
                         let flat_locals = self.convert_to_flat_locals();
                         let mut captures = Vec::new();
                         self.collect_captures(args[0].expr(), &flat_locals, &mut captures);
@@ -745,7 +740,6 @@ impl FunctionCompiler {
                                 let r = self.push_reg();
                                 self.emit(OpCode::Move { dst: r, src: slot as u8 }, &args[0].expr().span);
                             } else {
-                                // This should not happen since we just identified them as parent locals
                                 self.push_reg(); 
                             }
                         }
@@ -795,7 +789,7 @@ impl FunctionCompiler {
                     }
 
                     if method_name == "bind" && arg_count == 2 {
-                        // We do the move later
+
                     }
                 }
                 
@@ -1007,7 +1001,7 @@ impl FunctionCompiler {
                     }
                 } else if cmd == "raw" {
                     self.emit(OpCode::TerminalRaw, &expr.span);
-                } else if cmd == "normal" {
+                } else if cmd == "normal" || cmd == "cooked" {
                     self.emit(OpCode::TerminalNormal, &expr.span);
                 } else if cmd == "cursor" {
                     if let Some(a) = args.get(0) {
@@ -1027,7 +1021,7 @@ impl FunctionCompiler {
                         self.pop_reg(); // pop x_src
                     }
                 }
-                self.push_reg() // Return dummy
+                self.push_reg() 
             }
             crate::parser::ast::ExprKind::MemberAccess { receiver, member } => {
                 let base = self.next_local as u8;
@@ -1262,17 +1256,19 @@ impl FunctionCompiler {
                     self.next_local = (dst + 1) as usize;
                 }
                 if let Some(&func_id) = ctx.func_indices.get(name) {
-                    let dst = base; // discard result or store in base
+                    let dst = base; 
                     self.emit(OpCode::Call { dst, func_idx: func_id as u32, base, arg_count: args.len() as u8 }, &stmt.span);
                 }
                 self.next_local = base as usize;
             }
             crate::parser::ast::StmtKind::Input(name, ty) => {
+                let mut pushed = false;
                 let dst = if let Some(slot) = self.lookup_local(name) {
                     slot as u8
                 } else {
                     let slot = self.push_reg() as usize;
                     self.define_local(*name, slot);
+                    pushed = true;
                     slot as u8
                 };
                 
@@ -1285,7 +1281,9 @@ impl FunctionCompiler {
                 };
 
                 self.emit(OpCode::Input { dst, ty: type_tag }, &stmt.span);
-                self.pop_reg();
+                if pushed {
+                    self.pop_reg();
+                }
             }
             crate::parser::ast::StmtKind::Assign { name, value } => {
                 let mut optimized = false;
@@ -1588,8 +1586,6 @@ impl FunctionCompiler {
                             let len = self.bytecode.len();
                             let mut fused = false;
                             
-                            // Safe fusion heuristic: only fuse if the last statement emitted exactly ONE opcode.
-                            // This prevent ripping increments out of conditional blocks (like in Sieve).
                             if len == last_stmt_start + 1 {
                                 match self.bytecode[len - 1] {
                                     OpCode::IncVar { idx } => {

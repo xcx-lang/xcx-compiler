@@ -1,7 +1,7 @@
 //==language/database.md==\\
-# XCX 3.0 Database
-
-XCX 3.0 introduces native relational database support via the `database:` type and a set of built-in methods. Version 3.0 supports **SQLite** only.
+# XCX 3.1 Database
+Delta:
+XCX 3.1 introduces native relational database support via the `database:` type and a set of built-in methods. Version 3.1 supports **SQLite** only.
 
 ---
 
@@ -300,7 +300,7 @@ yield app.save(users);
 
 ## 5. Fiber Scoping Limitations (Windows)
 
-In XCX 3.0, specifically on Windows environments, initializing a fiber-local variable directly with a database result can occasionally lead to an `Undefined variable` [S101] error in subsequent lines.
+In XCX 3.1, specifically on Windows environments, initializing a fiber-local variable directly with a database result can occasionally lead to an `Undefined variable` [S101] error in subsequent lines.
 
 ### Recommended Workaround
 
