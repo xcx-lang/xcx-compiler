@@ -203,7 +203,7 @@ The 3.x line is not planned for new language features. Focus is on:
 
 ## Getting started
 
-**1. Download** the installer from [Releases](https://github.com/xcx-lang/xcx-compiler/releases): `xcx-setup.exe`
+**1. Download** the installer from [Releases]([https://github.com/xcx-lang/xcx-compiler/releases](https://github.com/xcxlang-org/xcx/releases)): `xcx-setup.exe`
 
 This adds `xcx` to your PATH. To uninstall: `xcx-uninstall.exe`.
 
@@ -280,7 +280,7 @@ Binary: `target/release/xcx`
 
 ## Editor support
 
-VS Code extension: [xcx-lang/xcx-vscode](https://github.com/xcx-lang/xcx-vscode)
+VS Code extension: [xcx-lang/xcx-vscode]([https://github.com/xcx-lang/xcx-vscode](https://github.com/xcxlang-org/xcx-vscode))
 
 Syntax highlighting, snippets, `.xcx` and `.pax` support.
 
