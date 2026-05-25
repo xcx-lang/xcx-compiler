@@ -95,7 +95,7 @@ The honest picture — what you gain and what you give up:
 | Type safety | strong | optional (TS) | optional (mypy) | static, compile-time |
 | Concurrency model | goroutines | event loop | async/await | cooperative fibers |
 | Ecosystem | large | very large | very large | minimal (early stage) |
-| Windows support | yes | yes | yes | only platform currently |
+| Windows support | yes | yes | yes | primary platform; Linux experimental (3.1.1) |
 
 XCX is not trying to replace Go or Node. It occupies a different space: small backend services and tools where you want zero dependency setup and a language that knows what you're building. The trade-off is an early-stage ecosystem and a single supported platform.
 
@@ -169,6 +169,8 @@ The current implementation reflects multiple iterations (Python → C → Rust),
 
 **Known rough edges:** Recursive function performance (no JIT coverage), a fiber scoping workaround required on Windows (see [`database.md`](documentation/language/database.md)), and VM complexity that can make certain edge-case bugs difficult to isolate.
 
+As of 3.1.1, an experimental Linux build is available. Linux support is in an early stage — the system was primarily developed and tested on Windows, so behavior may differ in Linux environments. Stability is not fully verified and some features may not work as expected. If you run into crashes, performance differences, or unexpected behavior on Linux, please [open an issue](https://github.com/xcx-lang/xcx-compiler/issues) — bug reports and error logs are very helpful.
+
 The ecosystem is minimal and evolving. APIs and internal behavior may change across minor versions.
 
 Contributions are welcome — bug reports and pull requests are appreciated. There is no formal contribution process yet; for larger changes, please open an issue first.
@@ -203,9 +205,9 @@ The 3.x line is not planned for new language features. Focus is on:
 
 ## Getting started
 
-**1. Download** the installer from [Releases]([https://github.com/xcx-lang/xcx-compiler/releases](https://github.com/xcxlang-org/xcx/releases)): `xcx-setup.exe`
+**1. Download** the installer from [Releases](https://github.com/xcxlang-org/xcx/releases): `xcx-setup.exe` (Windows) or the Linux binary (experimental, see release notes).
 
-This adds `xcx` to your PATH. To uninstall: `xcx-uninstall.exe`.
+This adds `xcx` to your PATH. To uninstall on Windows: `xcx-uninstall.exe`.
 
 **2. Hello world** — save as `hello.xcx`:
 
@@ -280,7 +282,7 @@ Binary: `target/release/xcx`
 
 ## Editor support
 
-VS Code extension: [xcx-lang/xcx-vscode]([https://github.com/xcx-lang/xcx-vscode](https://github.com/xcxlang-org/xcx-vscode))
+VS Code extension: [xcx-lang/xcx-vscode](https://github.com/xcxlang-org/xcx-vscode)
 
 Syntax highlighting, snippets, `.xcx` and `.pax` support.
 
