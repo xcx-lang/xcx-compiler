@@ -3,7 +3,7 @@
 ![Rust](https://img.shields.io/badge/built%20with-Rust-orange)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Version](https://img.shields.io/badge/version-3.1.0-brightgreen)
-![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20(experimental)-lightgrey)
 ![GitHub Stars](https://img.shields.io/github/stars/xcx-lang/xcx-compiler?style=flat)
 ![GitHub Issues](https://img.shields.io/github/issues/xcx-lang/xcx-compiler)
 ![Last Commit](https://img.shields.io/github/last-commit/xcx-lang/xcx-compiler)
