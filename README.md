@@ -103,7 +103,7 @@ XCX is not trying to replace Go or Node. It occupies a different space: small ba
 
 ## Performance (current state)
 
-Benchmarks run on Windows 11, Ryzen 5 5600X, 16GB RAM. XCX uses a register-based VM with a tracing JIT (Cranelift) that kicks in automatically on hot loops after ~50 iterations.
+Benchmarks run on Windows 11, Ryzen 7 5800X, 32GB RAM. XCX uses a register-based VM with a tracing JIT (Cranelift) that kicks in automatically on hot loops after ~50 iterations.
 > ⚠️ These benchmarks reflect the **current state of XCX 3.1**, not the target performance.
 > The runtime, VM, and JIT are still under active development and will change significantly.
 > 
