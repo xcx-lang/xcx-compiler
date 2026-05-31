@@ -6,6 +6,20 @@ String objects in XCX are immutable. Methods return a **new string** and do not 
 
 - `.length`: Returns the number of Unicode code points in the string (e.g., `"zażółć".length` is 6). **Used without parentheses.**
 
+## Escape Sequences
+
+String literals support standard escape sequences:
+
+| Sequence | Effect |
+|----------|--------|
+| `\n`     | Newline |
+| `\t`     | Horizontal Tab |
+| `\r`     | Carriage Return |
+| `\"`     | Double Quote |
+| `\\`     | Backslash |
+| `\xNN`   | Hexadecimal character (e.g., `\x1b`) |
+| `\NNN`   | Octal character (e.g., `\033`) |
+
 ## Methods
 
 | Method               | Signature    | Description                                      |
