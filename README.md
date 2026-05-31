@@ -139,13 +139,13 @@ XCX compiles source code through a multi-stage pipeline, all implemented in Rust
 
 ```
 Source (.xcx)
-  → Lexer        byte scanner on &[u8], no allocation, manual UTF-8 handling
-  → Pratt Parser top-down operator precedence, one-token lookahead
-  → Expander     resolves include directives, alias prefixing
-  → Sema         type checker, symbol table, collects all errors before codegen
-  → Compiler     two-pass, emits register-based bytecode + source spans
-  → VM           register VM, NaN-boxed 64-bit values, Arc ref counting
-  → JIT          Cranelift tracing JIT, hot loops compiled to native machine code
+  -> Lexer        byte scanner on &[u8], no allocation, manual UTF-8 handling
+  -> Pratt Parser top-down operator precedence, one-token lookahead
+  -> Expander     resolves include directives, alias prefixing
+  -> Sema         type checker, symbol table, collects all errors before codegen
+  -> Compiler     two-pass, emits register-based bytecode + source spans
+  -> VM           register VM, NaN-boxed 64-bit values, Arc ref counting
+  -> JIT          Cranelift tracing JIT, hot loops compiled to native machine code
 ```
 
 **NaN-boxing** — every value fits in a single `u64`. Scalars (int, float, bool, date) require zero heap allocation. Pointers to heap objects (strings, arrays, JSON, tables, fibers) live in the lower 48 bits. The JIT exploits this: incrementing a NaN-boxed integer is a single `iadd_imm` on the full 64-bit word — the tag bits in the high end are unaffected.
@@ -157,13 +157,14 @@ Source (.xcx)
 Full compiler internals: [`documentation/compiler/`](documentation/compiler/)
 
 ---
+
 ## Project status
 
 XCX is currently developed by a single contributor.
 
 The language is usable for small backend tools and experimental services, but it is not production-ready for large systems. The project is primarily focused on runtime design and architecture at this stage.
 
-The current implementation reflects multiple iterations (Python → C → Rust), which resulted in some architectural complexity — most notably in the VM and fiber execution model.
+The current implementation reflects multiple iterations (Python -> C -> Rust), which resulted in some architectural complexity — most notably in the VM and fiber execution model.
 
 **What works well:** HTTP servers, SQLite integration, JSON handling, file I/O, cooperative concurrency, interactive terminal programs, and numeric workloads that benefit from JIT-optimized loops.
 
@@ -174,7 +175,6 @@ As of 3.1.1, an experimental Linux build is available. Linux support is in an ea
 The ecosystem is minimal and evolving. APIs and internal behavior may change across minor versions.
 
 Contributions are welcome — bug reports and pull requests are appreciated. There is no formal contribution process yet; for larger changes, please open an issue first.
-
 
 ---
 
@@ -241,7 +241,7 @@ serve: api { port = 8080, routes = ["*" :: handle] };
 
 ```bash
 xcx server.xcx
-# GET http://localhost:8080 → {"ok":true}
+# GET http://localhost:8080 -> {"ok":true}
 ```
 
 ---
@@ -295,6 +295,8 @@ code --install-extension xcx-vscode/xcx-vscode-1.0.0.vsix
 ## Documentation
 
 Full docs at **[xcxlang.com](https://xcxlang.com)**
+
+Translated versions of the documentation (Polish, French, Russian, Chinese, Japanese, and more) are available at [github.com/xcxlang-org/xcx-docs](https://github.com/xcxlang-org/xcx-docs). Note that translations were generated with AI assistance and may contain inaccuracies — the English docs below are always the canonical reference.
 
 ### Language
 
