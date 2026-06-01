@@ -135,7 +135,7 @@ Loop and Sieve are competitive. Fibonacci dropped from 601ms to 60ms after recen
 
 ## Architecture
 
-XCX compiles source code through a multi-stage pipeline, all implemented in Rust (~5k lines):
+XCX compiles source code through a multi-stage pipeline, all implemented in Rust (~19.0k lines):
 
 ```
 Source (.xcx)
